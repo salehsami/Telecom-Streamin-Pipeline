@@ -3,7 +3,7 @@ import json
 import time
 
 from confluent_kafka import Producer
-
+from scenario import FraudScenarioGenerator
 from generator import TelecomEventGenerator
 from models import TelecomEvent
 
@@ -68,6 +68,19 @@ def parse_args():
         default=0,
         help="Number of events to generate. 0 means unlimited.",
     )
+    
+    parser.add_argument(
+    "--scenario",
+    type=str,
+    default=None,
+    choices=[
+        "top_up_velocity",
+        "sim_swap_risk",
+        "impossible_travel",
+        "usage_spike",
+    ],
+    help="Generate a predefined fraud scenario",
+)
 
     return parser.parse_args()
 
@@ -76,6 +89,7 @@ def main():
     args = parse_args()
 
     generator = TelecomEventGenerator(seed=args.seed)
+    scenario_generator = FraudScenarioGenerator(seed=args.seed)
 
     sleep_interval = 1 / args.rate
 
@@ -86,8 +100,38 @@ def main():
     print(f"Topic: {TOPIC}")
     print(f"Seed: {args.seed}")
     print(f"Rate: {args.rate} events/sec")
+    print(f"Scenario: {args.scenario}")
 
     try:
+        if args.scenario:
+            scenario_events = getattr(
+            scenario_generator,
+            args.scenario,
+        )()
+
+        print(f"Running scenario: {args.scenario}")
+
+        for event in scenario_events:
+            print(
+                json.dumps(
+                    event.model_dump(mode="json"),
+                    indent=2,
+                )
+            )
+
+            produce_event(event)
+
+            time.sleep(sleep_interval)
+
+        producer.flush()
+
+        print(
+            f"Scenario complete. "
+            f"Generated {len(scenario_events)} events."
+        )
+
+        return
+        
         while args.count == 0 or produced < args.count:
 
             event = generator.normal_event()
