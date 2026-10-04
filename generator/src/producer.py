@@ -2,6 +2,7 @@ import argparse
 import json
 import time
 
+from edge_cases import EdgeCaseGenerator
 from confluent_kafka import Producer
 from scenario import FraudScenarioGenerator
 from generator import TelecomEventGenerator
@@ -43,6 +44,17 @@ def produce_event(event: TelecomEvent):
     producer.poll(0)
 
 
+def produce_raw_event(key: str, payload: dict):
+    producer.produce(
+        topic=TOPIC,
+        key=key,
+        value=json.dumps(payload),
+        callback=delivery_report,
+    )
+
+    producer.poll(0)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Synthetic telecom event producer"
@@ -66,21 +78,32 @@ def parse_args():
         "--count",
         type=int,
         default=0,
-        help="Number of events to generate. 0 means unlimited.",
+        help="Number of normal events. 0 means unlimited.",
     )
-    
-    parser.add_argument(
-    "--scenario",
-    type=str,
-    default=None,
-    choices=[
-        "top_up_velocity",
-        "sim_swap_risk",
-        "impossible_travel",
-        "usage_spike",
-    ],
-    help="Generate a predefined fraud scenario",
-)
+
+    mode_group = parser.add_mutually_exclusive_group()
+
+    mode_group.add_argument(
+        "--scenario",
+        choices=[
+            "top_up_velocity",
+            "sim_swap_risk",
+            "impossible_travel",
+            "usage_spike",
+        ],
+        help="Run a deterministic fraud scenario",
+    )
+
+    mode_group.add_argument(
+        "--edge-case",
+        choices=[
+            "duplicate_event",
+            "out_of_order",
+            "late_event",
+            "malformed_event",
+        ],
+        help="Generate a streaming edge case",
+    )
 
     return parser.parse_args()
 
@@ -89,7 +112,14 @@ def main():
     args = parse_args()
 
     generator = TelecomEventGenerator(seed=args.seed)
-    scenario_generator = FraudScenarioGenerator(seed=args.seed)
+
+    scenario_generator = FraudScenarioGenerator(
+        seed=args.seed
+    )
+
+    edge_case_generator = EdgeCaseGenerator(
+        seed=args.seed
+    )
 
     sleep_interval = 1 / args.rate
 
@@ -103,35 +133,97 @@ def main():
     print(f"Scenario: {args.scenario}")
 
     try:
+
+    # -------------------------
+    # FRAUD SCENARIO MODE
+    # -------------------------
+
         if args.scenario:
+
             scenario_events = getattr(
-            scenario_generator,
-            args.scenario,
-        )()
+                scenario_generator,
+                args.scenario,
+            )()
 
-        print(f"Running scenario: {args.scenario}")
+            print(f"Running scenario: {args.scenario}")
 
-        for event in scenario_events:
-            print(
-                json.dumps(
-                    event.model_dump(mode="json"),
-                    indent=2,
+            for event in scenario_events:
+
+                print(
+                    json.dumps(
+                        event.model_dump(mode="json"),
+                        indent=2,
+                    )
                 )
+
+                produce_event(event)
+
+                time.sleep(sleep_interval)
+
+            producer.flush()
+
+            print(
+                f"Scenario complete. "
+                f"Generated {len(scenario_events)} events."
             )
 
-            produce_event(event)
+            return
 
-            time.sleep(sleep_interval)
+        # -------------------------
+        # EDGE CASE MODE
+        # -------------------------
 
-        producer.flush()
+        if args.edge_case:
 
-        print(
-            f"Scenario complete. "
-            f"Generated {len(scenario_events)} events."
-        )
+            edge_events = getattr(
+                edge_case_generator,
+                args.edge_case,
+            )()
 
-        return
-        
+            print(f"Running edge case: {args.edge_case}")
+
+            for event in edge_events:
+
+                if isinstance(event, TelecomEvent):
+
+                    print(
+                        json.dumps(
+                            event.model_dump(mode="json"),
+                            indent=2,
+                        )
+                    )
+
+                    produce_event(event)
+
+                else:
+
+                    print(
+                        json.dumps(
+                            event,
+                            indent=2,
+                        )
+                    )
+
+                    produce_raw_event(
+                        key="malformed",
+                        payload=event,
+                    )
+
+                time.sleep(sleep_interval)
+
+            producer.flush()
+
+            print(
+                f"Edge case complete. "
+                f"Generated {len(edge_events)} records."
+            )
+
+            return
+
+        # -------------------------
+        # NORMAL TRAFFIC MODE
+        # -------------------------
+
         while args.count == 0 or produced < args.count:
 
             event = generator.normal_event()
