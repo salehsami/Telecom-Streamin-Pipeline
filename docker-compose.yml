@@ -39,3 +39,47 @@ services:
       KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
 
       KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
+  
+  jobmanager:
+    build:
+      context: ./flink_job
+
+    container_name: telecom-flink-jobmanager
+
+    command: jobmanager
+
+    ports:
+      - "8081:8081"
+
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 2
+
+    volumes:
+      - ./flink_job/src:/opt/flink/usrlib
+
+    depends_on:
+      - kafka
+
+
+  taskmanager:
+    build:
+      context: ./flink_job
+
+    container_name: telecom-flink-taskmanager
+
+    command: taskmanager
+
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        taskmanager.numberOfTaskSlots: 2
+
+    volumes:
+      - ./flink_job/src:/opt/flink/usrlib
+
+    depends_on:
+      - jobmanager
