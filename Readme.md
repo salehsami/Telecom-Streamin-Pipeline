@@ -1,6 +1,6 @@
 # Real-Time Telecom Fraud & Usage Intelligence Pipeline
 
-> A zero-cost, two-week data engineering portfolio project demonstrating event-driven ingestion, stateful stream processing, late-data handling, real-time analytics, observability, and ML-ready feature engineering.
+> A personal project demonstrating event-driven ingestion, stateful stream processing, late-data handling, real-time analytics, observability, and ML-ready feature engineering.
 
 ---
 
