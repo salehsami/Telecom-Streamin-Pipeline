@@ -5,16 +5,20 @@ from datetime import datetime
 from pyflink.common import SimpleStringSchema, WatermarkStrategy
 from pyflink.common.typeinfo import Types
 from pyflink.datastream import StreamExecutionEnvironment
+from pyflink.datastream.functions import ProcessFunction
 from pyflink.datastream.connectors.kafka import (
+    DeliveryGuarantee,
+    KafkaRecordSerializationSchema,
+    KafkaSink,
     KafkaOffsetsInitializer,
     KafkaSource,
 )
-from pyflink.datastream.functions import ProcessFunction
-
 
 KAFKA_BOOTSTRAP_SERVERS = "kafka:19092"
 RAW_TOPIC = "telecom.raw.events.v1"
 CONSUMER_GROUP = "telecom-flink-raw-reader-v1"
+VALID_TOPIC = "telecom.valid.events.v1"
+DLQ_TOPIC = "telecom.dlq.events.v1"
 
 REQUIRED_FIELDS = {
     "schema_version": int,
@@ -147,6 +151,20 @@ def build_kafka_source():
     )
 
 
+def build_kafka_sink(topic: str):
+    return (
+        KafkaSink.builder()
+        .set_bootstrap_servers(KAFKA_BOOTSTRAP_SERVERS)
+        .set_record_serializer(
+            KafkaRecordSerializationSchema.builder()
+            .set_topic(topic)
+            .set_value_serialization_schema(SimpleStringSchema())
+            .build()
+        )
+        .set_delivery_guarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+        .build()
+    )
+
 def main():
     env = StreamExecutionEnvironment.get_execution_environment()
     env.set_parallelism(1)
@@ -184,8 +202,13 @@ def main():
         lambda record: json.loads(record)["status"] == "INVALID"
     )
 
-    valid_stream.print("VALID_EVENT")
-    invalid_stream.print("INVALID_EVENT")
+    valid_stream.sink_to(
+        build_kafka_sink(VALID_TOPIC)
+    ).name("Write Valid Events to Kafka")
+
+    invalid_stream.sink_to(
+        build_kafka_sink(DLQ_TOPIC)
+    ).name("Write Invalid Events to Dead Letter Topic")
 
     env.execute("Telecom Event Parsing and Validation")
 
