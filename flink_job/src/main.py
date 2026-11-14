@@ -5,6 +5,7 @@ from pyflink.common import Time
 from pyflink.common.time import Duration
 from pyflink.common.watermark_strategy import TimestampAssigner
 from pyflink.common import SimpleStringSchema, WatermarkStrategy
+from pyflink.datastream.output_tag import OutputTag
 from pyflink.common.typeinfo import Types
 from pyflink.datastream import StreamExecutionEnvironment
 from pyflink.datastream.connectors.kafka import (
@@ -27,6 +28,7 @@ CONSUMER_GROUP = "telecom-flink-raw-reader-v1"
 VALID_TOPIC = "telecom.valid.events.v1"
 DLQ_TOPIC = "telecom.dlq.events.v1"
 USAGE_AGGREGATES_TOPIC = "telecom.usage.country.minute.v1"
+LATE_USAGE_TOPIC = "telecom.usage.late-events.v1"
 
 REQUIRED_FIELDS = {
     "schema_version": int,
@@ -284,36 +286,57 @@ def main():
         watermark_strategy
     ).name("Assign Event Time and Watermarks")
     
-    # Keep only DATA_USAGE events.
     data_usage_stream = (
-        event_time_stream
-        .filter(
-            lambda record: json.loads(record).get("event_type") == "DATA_USAGE"
-        )
-        .map(
-            lambda record: (
-                json.loads(record)["country_code"],
-                float(json.loads(record)["payload"]["megabytes"]),
-            ),
-            output_type=Types.TUPLE([
-                Types.STRING(),
-                Types.DOUBLE(),
-            ]),
-        )
+    event_time_stream
+    .filter(
+        lambda record: json.loads(record).get("event_type") == "DATA_USAGE"
+    )
+    .map(
+        lambda record: (
+            json.loads(record)["country_code"],
+            float(json.loads(record)["payload"]["megabytes"]),
+            record,
+        ),
+        output_type=Types.TUPLE([
+            Types.STRING(),
+            Types.DOUBLE(),
+            Types.STRING(),
+        ]),
+    )
+)
+
+    late_usage_tag = OutputTag(
+        "late-usage-events",
+        Types.TUPLE([
+            Types.STRING(),
+            Types.DOUBLE(),
+            Types.STRING(),
+        ]),
     )
 
-    # Group by country and calculate usage in one-minute event-time windows.
-    usage_aggregation_stream = (
+    windowed_usage_stream = (
         data_usage_stream
         .key_by(lambda usage: usage[0])
         .window(TumblingEventTimeWindows.of(Time.minutes(1)))
-        .aggregate(
-            UsageAggregate(),
-            UsageWindowResult(),
-            accumulator_type=Types.TUPLE([
-                Types.DOUBLE(),
-                Types.LONG(),
-            ]),
+        .allowed_lateness(30_000)
+        .side_output_late_data(late_usage_tag)
+    )
+
+    usage_aggregation_stream = windowed_usage_stream.aggregate(
+        UsageAggregate(),
+        UsageWindowResult(),
+        accumulator_type=Types.TUPLE([
+            Types.DOUBLE(),
+            Types.LONG(),
+        ]),
+        output_type=Types.STRING(),
+    )
+
+    late_usage_stream = (
+        usage_aggregation_stream
+        .get_side_output(late_usage_tag)
+        .map(
+            lambda late_event: late_event[2],
             output_type=Types.STRING(),
         )
     )
@@ -333,6 +356,12 @@ def main():
     usage_aggregation_stream.sink_to(
     build_kafka_sink(USAGE_AGGREGATES_TOPIC)
     ).name("Write Country Minute Usage Aggregates to Kafka")    
+
+    late_usage_stream.sink_to(
+    build_kafka_sink(LATE_USAGE_TOPIC)
+    ).name("Write Late Usage Events to Kafka")  
+    
+
 
     # Write the invalid events to a Kafka topic.
     invalid_stream.sink_to(
