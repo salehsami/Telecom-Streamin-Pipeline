@@ -1,4 +1,3 @@
-
 import json
 from datetime import datetime, timezone
 from pyflink.common import Time
@@ -19,8 +18,14 @@ from pyflink.datastream.functions import (
     AggregateFunction,
     ProcessFunction,
     ProcessWindowFunction,
+    KeyedProcessFunction,
 )
 from pyflink.datastream.window import TumblingEventTimeWindows
+
+from pyflink.datastream.state import (
+    ListStateDescriptor,
+    ValueStateDescriptor,
+)
 
 KAFKA_BOOTSTRAP_SERVERS = "kafka:19092"
 RAW_TOPIC = "telecom.raw.events.v1"
@@ -29,6 +34,7 @@ VALID_TOPIC = "telecom.valid.events.v1"
 DLQ_TOPIC = "telecom.dlq.events.v1"
 USAGE_AGGREGATES_TOPIC = "telecom.usage.country.minute.v1"
 LATE_USAGE_TOPIC = "telecom.usage.late-events.v1"
+FRAUD_ALERTS_TOPIC = "telecom.fraud.alerts.v1"
 
 REQUIRED_FIELDS = {
     "schema_version": int,
@@ -214,6 +220,159 @@ class UsageWindowResult(ProcessWindowFunction):
             separators=(",", ":"),
             ensure_ascii=False,
         )
+        
+class TopUpVelocityDetector(KeyedProcessFunction):
+
+    def open(self, runtime_context):
+
+        self.attempts_state = runtime_context.get_list_state(
+            ListStateDescriptor(
+                "topup-attempts",
+                Types.TUPLE([
+                    Types.LONG(),
+                    Types.STRING(),
+                ]),
+            )
+        )
+
+        self.max_event_time_state = runtime_context.get_state(
+            ValueStateDescriptor(
+                "max-event-time",
+                Types.LONG(),
+            )
+        )
+
+        self.alerted_state = runtime_context.get_state(
+            ValueStateDescriptor(
+                "topup-velocity-alerted",
+                Types.BOOLEAN(),
+            )
+        )
+
+    def process_element(self, value, ctx):
+
+        event = json.loads(value)
+
+        event_timestamp = ctx.timestamp()
+
+        if event_timestamp is None:
+            return
+
+        previous_max = self.max_event_time_state.value()
+
+        reference_timestamp = (
+            event_timestamp
+            if previous_max is None
+            else max(event_timestamp, previous_max)
+        )
+
+        cutoff = reference_timestamp - 60_000
+
+        # Keep only attempts inside the rolling 60-second window.
+        attempts = [
+            (timestamp, event_id)
+            for timestamp, event_id in self.attempts_state.get()
+            if timestamp > cutoff
+        ]
+
+        # Ignore an event that is already outside the active window.
+        if event_timestamp > cutoff:
+            attempts.append(
+                (event_timestamp, event["event_id"])
+            )
+
+        attempts.sort(key=lambda item: item[0])
+
+        # Persist the updated customer state.
+        self.attempts_state.clear()
+
+        for attempt in attempts:
+            self.attempts_state.add(attempt)
+
+        self.max_event_time_state.update(reference_timestamp)
+
+        # Schedule cleanup using event time.
+        ctx.timer_service().register_event_time_timer(
+            event_timestamp + 60_001
+        )
+
+        already_alerted = self.alerted_state.value()
+
+        # Trigger once when the customer reaches five attempts.
+        if len(attempts) >= 5 and not already_alerted:
+
+            event_ids = [
+                event_id
+                for _, event_id in attempts
+            ]
+
+            window_start = datetime.fromtimestamp(
+                min(ts for ts, _ in attempts) / 1000,
+                tz=timezone.utc,
+            ).isoformat().replace("+00:00", "Z")
+
+            window_end = datetime.fromtimestamp(
+                max(ts for ts, _ in attempts) / 1000,
+                tz=timezone.utc,
+            ).isoformat().replace("+00:00", "Z")
+
+            alert = {
+                "alert_id": (
+                    f"TOP_UP_VELOCITY-"
+                    f"{event['customer_id']}-"
+                    f"{reference_timestamp}"
+                ),
+                "rule_name": "TOP_UP_VELOCITY",
+                "rule_version": 1,
+                "severity": "HIGH",
+                "customer_id": event["customer_id"],
+                "country_code": event["country_code"],
+                "detected_at": window_end,
+                "window_start": window_start,
+                "window_end": window_end,
+                "attempt_count": len(attempts),
+                "contributing_event_ids": event_ids,
+                "evidence": (
+                    f"{len(attempts)} top-up attempts "
+                    "within 60 seconds"
+                ),
+            }
+
+            self.alerted_state.update(True)
+
+            yield json.dumps(
+                alert,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+
+    def on_timer(self, timestamp, ctx):
+
+        max_event_time = self.max_event_time_state.value()
+
+        if max_event_time is None:
+            return
+
+        cutoff = max_event_time - 60_000
+
+        # Remove attempts that have expired.
+        attempts = [
+            (event_timestamp, event_id)
+            for event_timestamp, event_id in self.attempts_state.get()
+            if event_timestamp > cutoff
+        ]
+                # Reset alert status when the previous burst has expired.
+        if len(attempts) < 5:
+            self.alerted_state.clear()
+
+        self.attempts_state.clear()
+
+        for attempt in attempts:
+            self.attempts_state.add(attempt)
+
+        # Allow a future burst to generate a new alert.
+        if len(attempts) < 5:
+            self.alerted_state.clear()
 
 def build_kafka_source():
     return (
@@ -352,6 +511,25 @@ def main():
         build_kafka_sink(VALID_TOPIC)
     ).name("Write Valid Events to Kafka")
     
+        # Fraud rule 1: Detect high-velocity top-up attempts.
+    topup_stream = (
+        event_time_stream
+        .filter(
+            lambda record: (
+                json.loads(record).get("event_type")
+                == "TOP_UP_ATTEMPT"
+            )
+        )
+        .key_by(
+            lambda record: json.loads(record)["customer_id"]
+        )
+        .process(
+            TopUpVelocityDetector(),
+            output_type=Types.STRING(),
+        )
+        .name("Detect High-Velocity Top-Ups")
+    )    
+    
     # Write the usage aggregates to a Kafka topic.
     usage_aggregation_stream.sink_to(
     build_kafka_sink(USAGE_AGGREGATES_TOPIC)
@@ -361,7 +539,10 @@ def main():
     build_kafka_sink(LATE_USAGE_TOPIC)
     ).name("Write Late Usage Events to Kafka")  
     
-
+    # Write fraud alerts to Kafka.
+    topup_stream.sink_to(
+        build_kafka_sink(FRAUD_ALERTS_TOPIC)
+    ).name("Write Fraud Alerts to Kafka")
 
     # Write the invalid events to a Kafka topic.
     invalid_stream.sink_to(
