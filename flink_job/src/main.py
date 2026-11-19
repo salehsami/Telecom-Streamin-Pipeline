@@ -1,11 +1,15 @@
 import json
+import math
 from datetime import datetime, timezone
-from pyflink.common import Time
+
+from pyflink.common import (
+    SimpleStringSchema,
+    WatermarkStrategy,
+)
 from pyflink.common.time import Duration
-from pyflink.common.watermark_strategy import TimestampAssigner
-from pyflink.common import SimpleStringSchema, WatermarkStrategy
-from pyflink.datastream.output_tag import OutputTag
+
 from pyflink.common.typeinfo import Types
+from pyflink.common.watermark_strategy import TimestampAssigner
 from pyflink.datastream import StreamExecutionEnvironment
 from pyflink.datastream.connectors.kafka import (
     DeliveryGuarantee,
@@ -15,26 +19,76 @@ from pyflink.datastream.connectors.kafka import (
     KafkaSource,
 )
 from pyflink.datastream.functions import (
-    AggregateFunction,
-    ProcessFunction,
-    ProcessWindowFunction,
     KeyedProcessFunction,
+    ProcessFunction,
 )
-from pyflink.datastream.window import TumblingEventTimeWindows
-
+from pyflink.datastream.output_tag import OutputTag
 from pyflink.datastream.state import (
     ListStateDescriptor,
     ValueStateDescriptor,
 )
 
+
+# ============================================================
+# 1. CONFIGURATION
+# ============================================================
+
 KAFKA_BOOTSTRAP_SERVERS = "kafka:19092"
+
 RAW_TOPIC = "telecom.raw.events.v1"
 CONSUMER_GROUP = "telecom-flink-raw-reader-v1"
+
 VALID_TOPIC = "telecom.valid.events.v1"
 DLQ_TOPIC = "telecom.dlq.events.v1"
+
 USAGE_AGGREGATES_TOPIC = "telecom.usage.country.minute.v1"
 LATE_USAGE_TOPIC = "telecom.usage.late-events.v1"
+
 FRAUD_ALERTS_TOPIC = "telecom.fraud.alerts.v1"
+
+
+# Fraud detection configuration
+
+TOPUP_VELOCITY_COUNT = 5
+TOPUP_VELOCITY_WINDOW_MS = 60_000
+
+SIM_SWAP_WINDOW_MS = 600_000
+SIM_SWAP_HIGH_VALUE_EUR = 50.0
+
+LOGIN_COMPARISON_WINDOW_MS = 86_400_000
+IMPOSSIBLE_TRAVEL_MIN_DISTANCE_KM = 500.0
+IMPOSSIBLE_TRAVEL_MAX_SPEED_KMH = 900.0
+
+USAGE_SPIKE_WINDOW_MS = 600_000
+USAGE_SPIKE_THRESHOLD_MB = 1500.0
+
+
+# Usage aggregation configuration
+
+USAGE_WINDOW_MINUTES = 1
+ALLOWED_LATENESS_SECONDS = 30
+WATERMARK_OUT_OF_ORDER_SECONDS = 10
+
+
+# ============================================================
+# 2. OUTPUT TAGS
+# ============================================================
+
+INVALID_EVENTS_TAG = OutputTag(
+    "invalid-events",
+    Types.STRING(),
+)
+
+# The usage aggregator emits late events as JSON strings.
+LATE_USAGE_TAG = OutputTag(
+    "late-usage-events",
+    Types.STRING(),
+)
+
+
+# ============================================================
+# 3. VALIDATION HELPERS
+# ============================================================
 
 REQUIRED_FIELDS = {
     "schema_version": int,
@@ -51,194 +105,394 @@ REQUIRED_FIELDS = {
 
 
 def is_valid_timestamp(value: str) -> bool:
-    """Check that a timestamp is ISO-formatted and includes a timezone."""
-    try:
-        normalized = value.replace("Z", "+00:00")
-        parsed = datetime.fromisoformat(normalized)
-        return parsed.tzinfo is not None
-    except ValueError:
+    """
+    Check whether a timestamp is valid ISO-8601 and timezone-aware.
+
+    We require a timezone because Flink needs an unambiguous
+    point in time to process event-time windows.
+    """
+    if not isinstance(value, str):
         return False
 
-class EventTimestampAssigner(TimestampAssigner):
-
-    def extract_timestamp(self, value, record_timestamp):
-        event = json.loads(value)
-
-        event_time = event["event_time"]
-
-        parsed_time = datetime.fromisoformat(
-            event_time.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(
+            value.replace("Z", "+00:00")
         )
 
-        # Flink expects timestamps in milliseconds.
-        return int(parsed_time.timestamp() * 1000)
-    
+        return (
+            parsed.tzinfo is not None
+            and parsed.utcoffset() is not None
+        )
+
+    except (ValueError, TypeError):
+        return False
+
+
+def timestamp_to_epoch_ms(value: str) -> int:
+    """
+    Convert an ISO-8601 timestamp into Unix epoch milliseconds.
+    """
+    parsed = datetime.fromisoformat(
+        value.replace("Z", "+00:00")
+    )
+
+    return int(parsed.timestamp() * 1000)
+
+
+def epoch_ms_to_iso(timestamp_ms: int) -> str:
+    """
+    Convert Unix epoch milliseconds into UTC ISO-8601 format.
+    """
+    return (
+        datetime.fromtimestamp(
+            timestamp_ms / 1000,
+            tz=timezone.utc,
+        )
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def build_fraud_alert(
+    rule_name: str,
+    severity: str,
+    event: dict,
+    window_start_ms: int,
+    window_end_ms: int,
+    contributing_event_ids: list[str],
+    evidence: str,
+    additional_fields: dict | None = None,
+) -> str:
+    """
+    Build a consistent JSON alert for all fraud detectors.
+    """
+
+    alert = {
+        "alert_id": (
+            f"{rule_name}-"
+            f"{event['customer_id']}-"
+            f"{event['event_id']}"
+        ),
+        "rule_name": rule_name,
+        "rule_version": 1,
+        "severity": severity,
+        "customer_id": event["customer_id"],
+        "country_code": event["country_code"],
+        "detected_at": epoch_ms_to_iso(window_end_ms),
+        "window_start": epoch_ms_to_iso(window_start_ms),
+        "window_end": epoch_ms_to_iso(window_end_ms),
+        "contributing_event_ids": contributing_event_ids,
+        "evidence": evidence,
+    }
+
+    if additional_fields:
+        alert.update(additional_fields)
+
+    return json.dumps(
+        alert,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
+# ============================================================
+# 4. KAFKA EVENT PARSING AND VALIDATION
+# ============================================================
+
 class ParseAndValidateTelecomEvent(ProcessFunction):
+    """
+    Parse raw Kafka JSON and separate valid from invalid events.
+
+    Valid events continue through the main pipeline.
+    Invalid events are sent to the DLQ side output.
+    """
 
     def process_element(self, value, ctx):
-        # Step 1: Parse the incoming JSON message.
+
         try:
             event = json.loads(value)
-        except json.JSONDecodeError as exc:
-            yield json.dumps(
-                {
-                    "status": "INVALID",
-                    "raw_event": value,
-                    "errors": [f"Invalid JSON: {exc.msg}"],
-                },
-                separators=(",", ":"),
-                ensure_ascii=False,
+
+        except (json.JSONDecodeError, TypeError) as exc:
+            ctx.output(
+                INVALID_EVENTS_TAG,
+                json.dumps(
+                    {
+                        "raw_event": value,
+                        "errors": [f"Invalid JSON: {exc}"],
+                    }
+                ),
             )
             return
 
         errors = []
 
-        # Step 2: Check that the JSON represents an object.
         if not isinstance(event, dict):
-            errors.append("Top-level JSON value must be an object")
+            errors.append("Event must be a JSON object")
 
         else:
-            # Step 3: Check required fields and their data types.
             for field, expected_type in REQUIRED_FIELDS.items():
+
                 if field not in event:
-                    errors.append(f"Missing required field: {field}")
-                    continue
-
-                actual_value = event[field]
-
-                if expected_type is int:
-                    # Prevent True/False from being accepted as integers.
-                    correct_type = type(actual_value) is int
-                else:
-                    correct_type = isinstance(
-                        actual_value, expected_type
-                    )
-
-                if not correct_type:
                     errors.append(
-                        f"{field} must be {expected_type.__name__}"
+                        f"Missing required field: {field}"
                     )
                     continue
 
-                if (
-                    isinstance(actual_value, str)
-                    and not actual_value.strip()
-                ):
-                    errors.append(f"{field} must not be empty")
+                field_value = event[field]
 
-            # Step 4: Check the supported schema version.
-            schema_version = event.get("schema_version")
-            if type(schema_version) is int and schema_version != 1:
-                errors.append(
-                    f"Unsupported schema_version: {schema_version}"
-                )
-
-            # Step 5: Validate timestamps and timezone information.
-            for field in ("event_time", "ingested_at"):
-                timestamp = event.get(field)
-
-                if isinstance(timestamp, str) and timestamp.strip():
-                    if not is_valid_timestamp(timestamp):
+                # bool is a subclass of int in Python.
+                # Explicitly reject it for schema_version.
+                if field == "schema_version":
+                    if (
+                        not isinstance(field_value, int)
+                        or isinstance(field_value, bool)
+                    ):
                         errors.append(
-                            f"{field} must be an ISO timestamp "
-                            "with a timezone"
+                            "schema_version must be an integer"
                         )
 
-        # Step 6: Emit a classified invalid record.
+                elif not isinstance(
+                    field_value,
+                    expected_type,
+                ):
+                    errors.append(
+                        f"{field} must be "
+                        f"{expected_type.__name__}"
+                    )
+
+            if event.get("schema_version") != 1:
+                errors.append(
+                    "Unsupported schema_version; expected 1"
+                )
+
+            if not is_valid_timestamp(
+                event.get("event_time")
+            ):
+                errors.append(
+                    "event_time must be a valid "
+                    "timezone-aware ISO-8601 timestamp"
+                )
+
+            if not is_valid_timestamp(
+                event.get("ingested_at")
+            ):
+                errors.append(
+                    "ingested_at must be a valid "
+                    "timezone-aware ISO-8601 timestamp"
+                )
+
+            country_code = event.get("country_code")
+
+            if (
+                isinstance(country_code, str)
+                and len(country_code) != 2
+            ):
+                errors.append(
+                    "country_code must contain exactly 2 characters"
+                )
+
+            if (
+                isinstance(event.get("event_id"), str)
+                and not event["event_id"].strip()
+            ):
+                errors.append("event_id cannot be empty")
+
+            if (
+                isinstance(event.get("customer_id"), str)
+                and not event["customer_id"].strip()
+            ):
+                errors.append("customer_id cannot be empty")
+
         if errors:
-            yield json.dumps(
-                {
-                    "status": "INVALID",
-                    "raw_event": value,
-                    "errors": errors,
-                },
-                separators=(",", ":"),
-                ensure_ascii=False,
+            ctx.output(
+                INVALID_EVENTS_TAG,
+                json.dumps(
+                    {
+                        "raw_event": value,
+                        "errors": errors,
+                    },
+                    separators=(",", ":"),
+                ),
             )
             return
 
-        # Step 7: Emit a classified valid record.
         yield json.dumps(
             {
-                "status": "VALID",
+                "is_valid": True,
                 "event": event,
             },
             separators=(",", ":"),
-            ensure_ascii=False,
         )
 
-class UsageAggregate(AggregateFunction):
 
-    def create_accumulator(self):
-        # (total_megabytes, event_count)
-        return (0.0, 0)
+# ============================================================
+# 5. EVENT-TIME ASSIGNMENT
+# ============================================================
 
-    def add(self, value, accumulator):
-        # value = (country_code, megabytes)
-        total = accumulator[0] + value[1]
-        count = accumulator[1] + 1
+class EventTimestampAssigner(TimestampAssigner):
 
-        return (total, count)
+    def extract_timestamp(self, value, record_timestamp):
 
-    def get_result(self, accumulator):
-        return accumulator
+        event = json.loads(value)
 
-    def merge(self, a, b):
-        return (
-            a[0] + b[0],
-            a[1] + b[1],
+        return timestamp_to_epoch_ms(
+            event["event_time"]
         )
 
-class UsageWindowResult(ProcessWindowFunction):
 
-    def process(self, key, context, elements):
+# ============================================================
+# 6. USAGE AGGREGATION
+# ============================================================
 
-        total_megabytes, event_count = next(iter(elements))
+class UsageCountryMinuteAggregator(KeyedProcessFunction):
+    """
+    Aggregate DATA_USAGE events by country and one-minute event-time bucket.
 
-        window = context.window()
+    This uses keyed state and event-time timers instead of Flink's window
+    aggregate/process combination. That keeps the Python operator simple and
+    avoids serializing a ProcessWindowFunction for this pipeline.
 
-        window_start = datetime.fromtimestamp(
-            window.start / 1000,
-            tz=timezone.utc,
-        ).isoformat().replace("+00:00", "Z")
+    A bucket is emitted after its allowed-lateness period has elapsed. Events
+    arriving after that point are sent to the late-usage side output.
+    """
 
-        window_end = datetime.fromtimestamp(
-            window.end / 1000,
-            tz=timezone.utc,
-        ).isoformat().replace("+00:00", "Z")
+    WINDOW_SIZE_MS = USAGE_WINDOW_MINUTES * 60_000
+    ALLOWED_LATENESS_MS = ALLOWED_LATENESS_SECONDS * 1_000
 
-        result = {
-            "country_code": key,
-            "window_start": window_start,
-            "window_end": window_end,
-            "total_megabytes": round(total_megabytes, 2),
-            "event_count": event_count,
-        }
-
-        yield json.dumps(
-            result,
-            separators=(",", ":"),
-            ensure_ascii=False,
+    def open(self, runtime_context):
+        self.windows_state = runtime_context.get_list_state(
+            ListStateDescriptor(
+                "country-minute-usage-windows",
+                Types.TUPLE(
+                    [
+                        Types.LONG(),   # window_start_ms
+                        Types.DOUBLE(), # total_megabytes
+                        Types.LONG(),   # event_count
+                        Types.STRING(), # JSON array of event IDs
+                    ]
+                ),
+            )
         )
-        
+
+    def process_element(self, value, ctx):
+        event = json.loads(value)
+        event_timestamp = ctx.timestamp()
+
+        if event_timestamp is None:
+            return
+
+        payload = event.get("payload", {})
+        megabytes = payload.get("megabytes")
+
+        if (
+            not isinstance(megabytes, (int, float))
+            or isinstance(megabytes, bool)
+            or not math.isfinite(float(megabytes))
+            or megabytes <= 0
+        ):
+            return
+
+        window_start = (event_timestamp // self.WINDOW_SIZE_MS) * self.WINDOW_SIZE_MS
+        window_end = window_start + self.WINDOW_SIZE_MS
+        cleanup_timestamp = (
+            window_end - 1 + self.ALLOWED_LATENESS_MS
+        )
+
+        current_watermark = ctx.timer_service().current_watermark()
+        if current_watermark > cleanup_timestamp:
+            ctx.output(
+                LATE_USAGE_TAG,
+                json.dumps(
+                    {
+                        "country_code": event["country_code"],
+                        "event": event,
+                        "reason": "Received after the allowed event-time lateness period",
+                    },
+                    separators=(",", ":"),
+                ),
+            )
+            return
+
+        buckets = list(self.windows_state.get())
+        event_id = event["event_id"]
+        updated = False
+        new_buckets = []
+
+        for start_ms, total_mb, count, event_ids_json in buckets:
+            if start_ms != window_start:
+                new_buckets.append((start_ms, total_mb, count, event_ids_json))
+                continue
+
+            event_ids = json.loads(event_ids_json)
+            if event_id not in event_ids:
+                event_ids.append(event_id)
+                total_mb += float(megabytes)
+                count += 1
+
+            new_buckets.append(
+                (start_ms, total_mb, count, json.dumps(event_ids))
+            )
+            updated = True
+
+        if not updated:
+            new_buckets.append(
+                (
+                    window_start,
+                    float(megabytes),
+                    1,
+                    json.dumps([event_id]),
+                )
+            )
+
+        self.windows_state.update(new_buckets)
+        ctx.timer_service().register_event_time_timer(cleanup_timestamp)
+
+    def on_timer(self, timestamp, ctx):
+        remaining_buckets = []
+
+        for window_start, total_mb, event_count, event_ids_json in self.windows_state.get():
+            window_end = window_start + self.WINDOW_SIZE_MS
+            cleanup_timestamp = window_end - 1 + self.ALLOWED_LATENESS_MS
+
+            if cleanup_timestamp <= timestamp:
+                result = {
+                    "country_code": ctx.get_current_key(),
+                    "window_start": epoch_ms_to_iso(window_start),
+                    "window_end": epoch_ms_to_iso(window_end),
+                    "total_megabytes": round(total_mb, 2),
+                    "event_count": event_count,
+                    "contributing_event_ids": json.loads(event_ids_json),
+                }
+                yield json.dumps(result, separators=(",", ":"))
+            else:
+                remaining_buckets.append(
+                    (window_start, total_mb, event_count, event_ids_json)
+                )
+
+        self.windows_state.update(remaining_buckets)
+
+
+# ============================================================
+# 7. FRAUD DETECTOR 1: TOP-UP VELOCITY
+# ============================================================
+
 class TopUpVelocityDetector(KeyedProcessFunction):
+    """
+    Detect five or more top-up attempts by one customer
+    within a rolling 60-second event-time window.
+    """
 
     def open(self, runtime_context):
 
         self.attempts_state = runtime_context.get_list_state(
             ListStateDescriptor(
                 "topup-attempts",
-                Types.TUPLE([
-                    Types.LONG(),
-                    Types.STRING(),
-                ]),
-            )
-        )
-
-        self.max_event_time_state = runtime_context.get_state(
-            ValueStateDescriptor(
-                "max-event-time",
-                Types.LONG(),
+                Types.TUPLE(
+                    [
+                        Types.LONG(),
+                        Types.STRING(),
+                    ]
+                ),
             )
         )
 
@@ -253,303 +507,992 @@ class TopUpVelocityDetector(KeyedProcessFunction):
 
         event = json.loads(value)
 
+        if event["event_type"] != "TOP_UP_ATTEMPT":
+            return
+
         event_timestamp = ctx.timestamp()
 
         if event_timestamp is None:
             return
 
-        previous_max = self.max_event_time_state.value()
-
-        reference_timestamp = (
+        cutoff = (
             event_timestamp
-            if previous_max is None
-            else max(event_timestamp, previous_max)
+            - TOPUP_VELOCITY_WINDOW_MS
         )
 
-        cutoff = reference_timestamp - 60_000
-
-        # Keep only attempts inside the rolling 60-second window.
         attempts = [
             (timestamp, event_id)
-            for timestamp, event_id in self.attempts_state.get()
+            for timestamp, event_id
+            in self.attempts_state.get()
             if timestamp > cutoff
         ]
 
-        # Ignore an event that is already outside the active window.
-        if event_timestamp > cutoff:
+        known_event_ids = {
+            event_id
+            for _, event_id in attempts
+        }
+
+        # Do not count the same event ID twice
+        # inside this customer's active window.
+        if (
+            event_timestamp > cutoff
+            and event["event_id"] not in known_event_ids
+        ):
             attempts.append(
-                (event_timestamp, event["event_id"])
+                (
+                    event_timestamp,
+                    event["event_id"],
+                )
             )
 
         attempts.sort(key=lambda item: item[0])
 
-        # Persist the updated customer state.
-        self.attempts_state.clear()
+        self.attempts_state.update(attempts)
 
-        for attempt in attempts:
-            self.attempts_state.add(attempt)
-
-        self.max_event_time_state.update(reference_timestamp)
-
-        # Schedule cleanup using event time.
         ctx.timer_service().register_event_time_timer(
-            event_timestamp + 60_001
+            event_timestamp
+            + TOPUP_VELOCITY_WINDOW_MS
+            + 1
         )
 
-        already_alerted = self.alerted_state.value()
+        if (
+            len(attempts) >= TOPUP_VELOCITY_COUNT
+            and not self.alerted_state.value()
+        ):
 
-        # Trigger once when the customer reaches five attempts.
-        if len(attempts) >= 5 and not already_alerted:
-
-            event_ids = [
-                event_id
-                for _, event_id in attempts
-            ]
-
-            window_start = datetime.fromtimestamp(
-                min(ts for ts, _ in attempts) / 1000,
-                tz=timezone.utc,
-            ).isoformat().replace("+00:00", "Z")
-
-            window_end = datetime.fromtimestamp(
-                max(ts for ts, _ in attempts) / 1000,
-                tz=timezone.utc,
-            ).isoformat().replace("+00:00", "Z")
-
-            alert = {
-                "alert_id": (
-                    f"TOP_UP_VELOCITY-"
-                    f"{event['customer_id']}-"
-                    f"{reference_timestamp}"
-                ),
-                "rule_name": "TOP_UP_VELOCITY",
-                "rule_version": 1,
-                "severity": "HIGH",
-                "customer_id": event["customer_id"],
-                "country_code": event["country_code"],
-                "detected_at": window_end,
-                "window_start": window_start,
-                "window_end": window_end,
-                "attempt_count": len(attempts),
-                "contributing_event_ids": event_ids,
-                "evidence": (
+            alert = build_fraud_alert(
+                rule_name="TOP_UP_VELOCITY",
+                severity="HIGH",
+                event=event,
+                window_start_ms=attempts[0][0],
+                window_end_ms=event_timestamp,
+                contributing_event_ids=[
+                    event_id
+                    for _, event_id in attempts
+                ],
+                evidence=(
                     f"{len(attempts)} top-up attempts "
-                    "within 60 seconds"
+                    f"within {TOPUP_VELOCITY_WINDOW_MS // 1000} seconds"
                 ),
-            }
+                additional_fields={
+                    "attempt_count": len(attempts),
+                },
+            )
 
             self.alerted_state.update(True)
 
-            yield json.dumps(
-                alert,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            )
+            yield alert
 
     def on_timer(self, timestamp, ctx):
 
-        max_event_time = self.max_event_time_state.value()
+        cutoff = (
+            timestamp
+            - TOPUP_VELOCITY_WINDOW_MS
+        )
 
-        if max_event_time is None:
-            return
-
-        cutoff = max_event_time - 60_000
-
-        # Remove attempts that have expired.
         attempts = [
             (event_timestamp, event_id)
-            for event_timestamp, event_id in self.attempts_state.get()
+            for event_timestamp, event_id
+            in self.attempts_state.get()
             if event_timestamp > cutoff
         ]
-                # Reset alert status when the previous burst has expired.
-        if len(attempts) < 5:
+
+        self.attempts_state.update(attempts)
+
+        if len(attempts) < TOPUP_VELOCITY_COUNT:
             self.alerted_state.clear()
 
-        self.attempts_state.clear()
+        if attempts:
+            next_expiry = (
+                min(timestamp for timestamp, _ in attempts)
+                + TOPUP_VELOCITY_WINDOW_MS
+                + 1
+            )
 
-        for attempt in attempts:
-            self.attempts_state.add(attempt)
+            ctx.timer_service().register_event_time_timer(
+                next_expiry
+            )
 
-        # Allow a future burst to generate a new alert.
-        if len(attempts) < 5:
+
+# ============================================================
+# 8. FRAUD DETECTOR 2: SIM-SWAP RISK
+# ============================================================
+
+class SimSwapRiskDetector(KeyedProcessFunction):
+    """
+    Detect this sequence for one customer:
+
+    1. SIM_SWAP
+    2. DEVICE_CHANGE
+    3. High-value TOP_UP_ATTEMPT from the new device
+
+    All three events must occur within ten minutes.
+    """
+
+    def open(self, runtime_context):
+
+        self.sim_swap_timestamp = runtime_context.get_state(
+            ValueStateDescriptor(
+                "sim-swap-timestamp",
+                Types.LONG(),
+            )
+        )
+
+        self.sim_swap_event_id = runtime_context.get_state(
+            ValueStateDescriptor(
+                "sim-swap-event-id",
+                Types.STRING(),
+            )
+        )
+
+        self.new_device_id_state = runtime_context.get_state(
+            ValueStateDescriptor(
+                "sim-swap-new-device-id",
+                Types.STRING(),
+            )
+        )
+
+        self.device_change_timestamp = runtime_context.get_state(
+            ValueStateDescriptor(
+                "device-change-timestamp",
+                Types.LONG(),
+            )
+        )
+
+        self.device_change_event_id = runtime_context.get_state(
+            ValueStateDescriptor(
+                "device-change-event-id",
+                Types.STRING(),
+            )
+        )
+
+        self.alerted_state = runtime_context.get_state(
+            ValueStateDescriptor(
+                "sim-swap-alerted",
+                Types.BOOLEAN(),
+            )
+        )
+
+    def process_element(self, value, ctx):
+
+        event = json.loads(value)
+
+        event_type = event["event_type"]
+        event_timestamp = ctx.timestamp()
+
+        if event_timestamp is None:
+            return
+
+        # Step 1: Record a SIM swap.
+        if event_type == "SIM_SWAP":
+
+            self.sim_swap_timestamp.update(
+                event_timestamp
+            )
+
+            self.sim_swap_event_id.update(
+                event["event_id"]
+            )
+
+            self.device_change_timestamp.clear()
+            self.device_change_event_id.clear()
+            self.new_device_id_state.clear()
             self.alerted_state.clear()
 
-def build_kafka_source():
-    return (
-        KafkaSource.builder()
-        .set_bootstrap_servers(KAFKA_BOOTSTRAP_SERVERS)
-        .set_topics(RAW_TOPIC)
-        .set_group_id(CONSUMER_GROUP)
-        .set_starting_offsets(KafkaOffsetsInitializer.latest())
-        .set_value_only_deserializer(SimpleStringSchema())
-        .build()
+            ctx.timer_service().register_event_time_timer(
+                event_timestamp
+                + SIM_SWAP_WINDOW_MS
+                + 1
+            )
+
+            return
+
+        sim_timestamp = self.sim_swap_timestamp.value()
+
+        if sim_timestamp is None:
+            return
+
+        if not (
+            sim_timestamp
+            <= event_timestamp
+            <= sim_timestamp + SIM_SWAP_WINDOW_MS
+        ):
+            return
+
+        # Step 2: Record the device change.
+        if event_type == "DEVICE_CHANGE":
+
+            payload = event.get("payload", {})
+
+            new_device_id = payload.get(
+                "new_device_id",
+                event.get("device_id"),
+            )
+
+            if not new_device_id:
+                return
+
+            self.device_change_timestamp.update(
+                event_timestamp
+            )
+
+            self.device_change_event_id.update(
+                event["event_id"]
+            )
+
+            self.new_device_id_state.update(
+                new_device_id
+            )
+
+            return
+
+        # Step 3: Check for a high-value top-up
+        # from the new device.
+        if event_type == "TOP_UP_ATTEMPT":
+
+            device_timestamp = (
+                self.device_change_timestamp.value()
+            )
+
+            expected_device = (
+                self.new_device_id_state.value()
+            )
+
+            if (
+                device_timestamp is None
+                or expected_device is None
+            ):
+                return
+
+            if event_timestamp < device_timestamp:
+                return
+
+            if event["device_id"] != expected_device:
+                return
+
+            payload = event.get("payload", {})
+            amount = payload.get("amount")
+
+            if (
+                not isinstance(amount, (int, float))
+                or isinstance(amount, bool)
+                or amount < SIM_SWAP_HIGH_VALUE_EUR
+            ):
+                return
+
+            if self.alerted_state.value():
+                return
+
+            alert = build_fraud_alert(
+                rule_name="SIM_SWAP_RISK",
+                severity="HIGH",
+                event=event,
+                window_start_ms=sim_timestamp,
+                window_end_ms=event_timestamp,
+                contributing_event_ids=[
+                    self.sim_swap_event_id.value(),
+                    self.device_change_event_id.value(),
+                    event["event_id"],
+                ],
+                evidence=(
+                    "SIM swap followed by device change "
+                    "and a high-value top-up of "
+                    f"EUR {amount:.2f}"
+                ),
+                additional_fields={
+                    "top_up_amount": amount,
+                    "currency": payload.get(
+                        "currency",
+                        "EUR",
+                    ),
+                    "new_device_id": expected_device,
+                },
+            )
+
+            self.alerted_state.update(True)
+
+            yield alert
+
+    def on_timer(self, timestamp, ctx):
+
+        sim_timestamp = self.sim_swap_timestamp.value()
+
+        if (
+            sim_timestamp is not None
+            and timestamp
+            >= sim_timestamp + SIM_SWAP_WINDOW_MS + 1
+        ):
+
+            self.sim_swap_timestamp.clear()
+            self.sim_swap_event_id.clear()
+            self.device_change_timestamp.clear()
+            self.device_change_event_id.clear()
+            self.new_device_id_state.clear()
+            self.alerted_state.clear()
+
+
+# ============================================================
+# 9. FRAUD DETECTOR 3: IMPOSSIBLE TRAVEL
+# ============================================================
+
+# Approximate country-centre coordinates.
+# These are demo coordinates, not precise device locations.
+
+COUNTRY_COORDINATES = {
+    "BE": (50.5039, 4.4699),
+    "NL": (52.1326, 5.2913),
+    "DE": (51.1657, 10.4515),
+    "FR": (46.2276, 2.2137),
+    "US": (39.8283, -98.5795),
+    "PK": (30.3753, 69.3451),
+}
+
+
+def calculate_distance_km(country_a, country_b):
+    """
+    Calculate approximate distance between country centres
+    using the Haversine formula.
+    """
+
+    if (
+        country_a not in COUNTRY_COORDINATES
+        or country_b not in COUNTRY_COORDINATES
+    ):
+        return None
+
+    lat1, lon1 = COUNTRY_COORDINATES[country_a]
+    lat2, lon2 = COUNTRY_COORDINATES[country_b]
+
+    earth_radius_km = 6371.0
+
+    lat1 = math.radians(lat1)
+    lon1 = math.radians(lon1)
+    lat2 = math.radians(lat2)
+    lon2 = math.radians(lon2)
+
+    delta_lat = lat2 - lat1
+    delta_lon = lon2 - lon1
+
+    a = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1)
+        * math.cos(lat2)
+        * math.sin(delta_lon / 2) ** 2
     )
 
+    c = 2 * math.atan2(
+        math.sqrt(a),
+        math.sqrt(1 - a),
+    )
 
-def build_kafka_sink(topic: str):
+    return earth_radius_km * c
+
+
+class ImpossibleTravelDetector(KeyedProcessFunction):
+    """
+    Compare consecutive successful logins for one customer.
+
+    Generate an alert when the implied travel speed exceeds
+    the configured maximum.
+    """
+
+    def open(self, runtime_context):
+
+        self.last_login_timestamp = runtime_context.get_state(
+            ValueStateDescriptor(
+                "last-login-timestamp",
+                Types.LONG(),
+            )
+        )
+
+        self.last_login_country = runtime_context.get_state(
+            ValueStateDescriptor(
+                "last-login-country",
+                Types.STRING(),
+            )
+        )
+
+        self.last_login_event_id = runtime_context.get_state(
+            ValueStateDescriptor(
+                "last-login-event-id",
+                Types.STRING(),
+            )
+        )
+
+    def process_element(self, value, ctx):
+
+        event = json.loads(value)
+
+        if event["event_type"] != "LOGIN":
+            return
+
+        payload = event.get("payload", {})
+
+        if payload.get("success") is not True:
+            return
+
+        event_timestamp = ctx.timestamp()
+
+        if event_timestamp is None:
+            return
+
+        current_country = event["country_code"]
+
+        previous_timestamp = (
+            self.last_login_timestamp.value()
+        )
+
+        previous_country = (
+            self.last_login_country.value()
+        )
+
+        previous_event_id = (
+            self.last_login_event_id.value()
+        )
+
+        if (
+            previous_timestamp is not None
+            and previous_country is not None
+            and previous_event_id is not None
+        ):
+
+            elapsed_ms = (
+                event_timestamp - previous_timestamp
+            )
+
+            distance = calculate_distance_km(
+                previous_country,
+                current_country,
+            )
+
+            if (
+                distance is not None
+                and 0 < elapsed_ms <= LOGIN_COMPARISON_WINDOW_MS
+            ):
+
+                elapsed_hours = elapsed_ms / 3_600_000
+
+                speed_kmh = (
+                    distance / elapsed_hours
+                )
+
+                if (
+                    distance
+                    >= IMPOSSIBLE_TRAVEL_MIN_DISTANCE_KM
+                    and speed_kmh
+                    > IMPOSSIBLE_TRAVEL_MAX_SPEED_KMH
+                ):
+
+                    alert = build_fraud_alert(
+                        rule_name="IMPOSSIBLE_TRAVEL",
+                        severity="CRITICAL",
+                        event=event,
+                        window_start_ms=previous_timestamp,
+                        window_end_ms=event_timestamp,
+                        contributing_event_ids=[
+                            previous_event_id,
+                            event["event_id"],
+                        ],
+                        evidence=(
+                            f"Successful logins from "
+                            f"{previous_country} and "
+                            f"{current_country} imply "
+                            f"travel at approximately "
+                            f"{speed_kmh:.0f} km/h"
+                        ),
+                        additional_fields={
+                            "previous_country": previous_country,
+                            "current_country": current_country,
+                            "distance_km": round(
+                                distance,
+                                2,
+                            ),
+                            "elapsed_minutes": round(
+                                elapsed_ms / 60_000,
+                                2,
+                            ),
+                            "implied_speed_kmh": round(
+                                speed_kmh,
+                                2,
+                            ),
+                        },
+                    )
+
+                    yield alert
+
+        # Keep the current successful login as the
+        # comparison point for the next successful login.
+        self.last_login_timestamp.update(
+            event_timestamp
+        )
+
+        self.last_login_country.update(
+            current_country
+        )
+
+        self.last_login_event_id.update(
+            event["event_id"]
+        )
+
+
+# ============================================================
+# 10. FRAUD DETECTOR 4: USAGE SPIKE
+# ============================================================
+
+class UsageSpikeDetector(KeyedProcessFunction):
+    """
+    Detect a customer's data usage exceeding the configured
+    threshold within a rolling ten-minute event-time window.
+    """
+
+    def open(self, runtime_context):
+
+        self.usage_state = runtime_context.get_list_state(
+            ListStateDescriptor(
+                "usage-spike-events",
+                Types.TUPLE(
+                    [
+                        Types.LONG(),
+                        Types.STRING(),
+                        Types.DOUBLE(),
+                        Types.STRING(),
+                    ]
+                ),
+            )
+        )
+
+        self.alerted_state = runtime_context.get_state(
+            ValueStateDescriptor(
+                "usage-spike-alerted",
+                Types.BOOLEAN(),
+            )
+        )
+
+    def process_element(self, value, ctx):
+
+        event = json.loads(value)
+
+        if event["event_type"] != "DATA_USAGE":
+            return
+
+        event_timestamp = ctx.timestamp()
+
+        if event_timestamp is None:
+            return
+
+        payload = event.get("payload", {})
+        megabytes = payload.get("megabytes")
+
+        if (
+            not isinstance(megabytes, (int, float))
+            or isinstance(megabytes, bool)
+            or megabytes <= 0
+        ):
+            return
+
+        cutoff = (
+            event_timestamp
+            - USAGE_SPIKE_WINDOW_MS
+        )
+
+        usage_events = [
+            (
+                timestamp,
+                event_id,
+                amount,
+                country,
+            )
+            for timestamp, event_id, amount, country
+            in self.usage_state.get()
+            if timestamp > cutoff
+        ]
+
+        known_event_ids = {
+            event_id
+            for _, event_id, _, _ in usage_events
+        }
+
+        if event["event_id"] not in known_event_ids:
+
+            usage_events.append(
+                (
+                    event_timestamp,
+                    event["event_id"],
+                    float(megabytes),
+                    event["country_code"],
+                )
+            )
+
+        usage_events.sort(
+            key=lambda item: item[0]
+        )
+
+        self.usage_state.update(usage_events)
+
+        ctx.timer_service().register_event_time_timer(
+            event_timestamp
+            + USAGE_SPIKE_WINDOW_MS
+            + 1
+        )
+
+        total_mb = sum(
+            amount
+            for _, _, amount, _ in usage_events
+        )
+
+        if (
+            total_mb >= USAGE_SPIKE_THRESHOLD_MB
+            and not self.alerted_state.value()
+        ):
+
+            alert = build_fraud_alert(
+                rule_name="USAGE_SPIKE",
+                severity="MEDIUM",
+                event=event,
+                window_start_ms=usage_events[0][0],
+                window_end_ms=event_timestamp,
+                contributing_event_ids=[
+                    event_id
+                    for _, event_id, _, _ in usage_events
+                ],
+                evidence=(
+                    f"Customer used {total_mb:.2f} MB "
+                    f"within "
+                    f"{USAGE_SPIKE_WINDOW_MS // 60_000} minutes"
+                ),
+                additional_fields={
+                    "total_megabytes": round(
+                        total_mb,
+                        2,
+                    ),
+                    "threshold_megabytes": (
+                        USAGE_SPIKE_THRESHOLD_MB
+                    ),
+                    "usage_event_count": len(
+                        usage_events
+                    ),
+                },
+            )
+
+            self.alerted_state.update(True)
+
+            yield alert
+
+    def on_timer(self, timestamp, ctx):
+
+        cutoff = (
+            timestamp
+            - USAGE_SPIKE_WINDOW_MS
+        )
+
+        usage_events = [
+            (
+                event_timestamp,
+                event_id,
+                amount,
+                country,
+            )
+            for (
+                event_timestamp,
+                event_id,
+                amount,
+                country,
+            ) in self.usage_state.get()
+            if event_timestamp > cutoff
+        ]
+
+        self.usage_state.update(usage_events)
+
+        total_mb = sum(
+            amount
+            for _, _, amount, _ in usage_events
+        )
+
+        if total_mb < USAGE_SPIKE_THRESHOLD_MB:
+            self.alerted_state.clear()
+
+        if usage_events:
+
+            next_expiry = (
+                min(
+                    event_timestamp
+                    for (
+                        event_timestamp,
+                        _,
+                        _,
+                        _,
+                    ) in usage_events
+                )
+                + USAGE_SPIKE_WINDOW_MS
+                + 1
+            )
+
+            ctx.timer_service().register_event_time_timer(
+                next_expiry
+            )
+
+
+# ============================================================
+# 11. KAFKA SINK HELPER
+# ============================================================
+
+def create_kafka_sink(topic_name: str):
+
     return (
         KafkaSink.builder()
-        .set_bootstrap_servers(KAFKA_BOOTSTRAP_SERVERS)
+        .set_bootstrap_servers(
+            KAFKA_BOOTSTRAP_SERVERS
+        )
         .set_record_serializer(
             KafkaRecordSerializationSchema.builder()
-            .set_topic(topic)
-            .set_value_serialization_schema(SimpleStringSchema())
+            .set_topic(topic_name)
+            .set_value_serialization_schema(
+                SimpleStringSchema()
+            )
             .build()
         )
-        .set_delivery_guarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+        .set_delivery_guarantee(
+            DeliveryGuarantee.AT_LEAST_ONCE
+        )
         .build()
     )
 
+
+# ============================================================
+# 12. MAIN FLINK PIPELINE
+# ============================================================
+
 def main():
+
     env = StreamExecutionEnvironment.get_execution_environment()
+
     env.set_parallelism(1)
 
-    kafka_source = build_kafka_source()
+    # --------------------------------------------------------
+    # A. Read raw events from Kafka
+    # --------------------------------------------------------
+
+    kafka_source = (
+        KafkaSource.builder()
+        .set_bootstrap_servers(
+            KAFKA_BOOTSTRAP_SERVERS
+        )
+        .set_topics(RAW_TOPIC)
+        .set_group_id(CONSUMER_GROUP)
+        .set_starting_offsets(
+            KafkaOffsetsInitializer.latest()
+        )
+        .set_value_only_deserializer(
+            SimpleStringSchema()
+        )
+        .build()
+    )
 
     raw_stream = env.from_source(
         kafka_source,
         WatermarkStrategy.no_watermarks(),
-        "Kafka Raw Telecom Source",
+        "Kafka raw event source",
     )
 
-    # Classify every incoming message as VALID or INVALID.
-    classified_stream = raw_stream.process(
+    # --------------------------------------------------------
+    # B. Parse and validate events
+    # --------------------------------------------------------
+
+    parsed_stream = raw_stream.process(
         ParseAndValidateTelecomEvent(),
         output_type=Types.STRING(),
     )
 
-    # Branch 1: Keep valid events and remove the classification wrapper.
     valid_stream = (
-        classified_stream
-        .filter(lambda record: json.loads(record)["status"] == "VALID")
+        parsed_stream
+        .filter(
+            lambda record: json.loads(record)["is_valid"]
+        )
         .map(
             lambda record: json.dumps(
                 json.loads(record)["event"],
                 separators=(",", ":"),
-                ensure_ascii=False,
             ),
-            output_type=Types.STRING(),
+        output_type=Types.STRING(),
         )
     )
-    
-    
-    # Generate event-time watermarks.
+
+    invalid_stream = parsed_stream.get_side_output(
+        INVALID_EVENTS_TAG
+    )
+
+    # --------------------------------------------------------
+    # C. Assign event-time timestamps and watermarks
+    # --------------------------------------------------------
+
     watermark_strategy = (
         WatermarkStrategy
-        .for_bounded_out_of_orderness(Duration.of_seconds(10))
-        .with_timestamp_assigner(EventTimestampAssigner())
-    )
-
-    # Assign event timestamps and watermarks to valid events.
-    event_time_stream = valid_stream.assign_timestamps_and_watermarks(
-        watermark_strategy
-    ).name("Assign Event Time and Watermarks")
-    
-    data_usage_stream = (
-    event_time_stream
-    .filter(
-        lambda record: json.loads(record).get("event_type") == "DATA_USAGE"
-    )
-    .map(
-        lambda record: (
-            json.loads(record)["country_code"],
-            float(json.loads(record)["payload"]["megabytes"]),
-            record,
-        ),
-        output_type=Types.TUPLE([
-            Types.STRING(),
-            Types.DOUBLE(),
-            Types.STRING(),
-        ]),
-    )
-)
-
-    late_usage_tag = OutputTag(
-        "late-usage-events",
-        Types.TUPLE([
-            Types.STRING(),
-            Types.DOUBLE(),
-            Types.STRING(),
-        ]),
-    )
-
-    windowed_usage_stream = (
-        data_usage_stream
-        .key_by(lambda usage: usage[0])
-        .window(TumblingEventTimeWindows.of(Time.minutes(1)))
-        .allowed_lateness(30_000)
-        .side_output_late_data(late_usage_tag)
-    )
-
-    usage_aggregation_stream = windowed_usage_stream.aggregate(
-        UsageAggregate(),
-        UsageWindowResult(),
-        accumulator_type=Types.TUPLE([
-            Types.DOUBLE(),
-            Types.LONG(),
-        ]),
-        output_type=Types.STRING(),
-    )
-
-    late_usage_stream = (
-        usage_aggregation_stream
-        .get_side_output(late_usage_tag)
-        .map(
-            lambda late_event: late_event[2],
-            output_type=Types.STRING(),
-        )
-    )
-
-
-    # Branch 2: Keep invalid records with their error details.
-    invalid_stream = classified_stream.filter(
-        lambda record: json.loads(record)["status"] == "INVALID"
-    )
-    
-    # Write the valid events to a Kafka topic.
-    event_time_stream.sink_to(
-        build_kafka_sink(VALID_TOPIC)
-    ).name("Write Valid Events to Kafka")
-    
-        # Fraud rule 1: Detect high-velocity top-up attempts.
-    topup_stream = (
-        event_time_stream
-        .filter(
-            lambda record: (
-                json.loads(record).get("event_type")
-                == "TOP_UP_ATTEMPT"
+        .for_bounded_out_of_orderness(
+            Duration.of_seconds(
+                WATERMARK_OUT_OF_ORDER_SECONDS
             )
         )
+        .with_timestamp_assigner(
+            EventTimestampAssigner()
+        )
+    )
+
+    timed_valid_stream = (
+        valid_stream.assign_timestamps_and_watermarks(
+            watermark_strategy
+        )
+    )
+
+    # --------------------------------------------------------
+    # D. Publish valid events
+    # --------------------------------------------------------
+
+    timed_valid_stream.sink_to(
+        create_kafka_sink(VALID_TOPIC)
+    )
+
+    # --------------------------------------------------------
+    # E. Top-up velocity fraud detection
+    # --------------------------------------------------------
+
+    topup_stream = (
+        timed_valid_stream
         .key_by(
-            lambda record: json.loads(record)["customer_id"]
+            lambda value: json.loads(value)["customer_id"]
         )
         .process(
             TopUpVelocityDetector(),
             output_type=Types.STRING(),
         )
-        .name("Detect High-Velocity Top-Ups")
-    )    
-    
-    # Write the usage aggregates to a Kafka topic.
-    usage_aggregation_stream.sink_to(
-    build_kafka_sink(USAGE_AGGREGATES_TOPIC)
-    ).name("Write Country Minute Usage Aggregates to Kafka")    
+    )
+
+    # --------------------------------------------------------
+    # F. SIM-swap risk fraud detection
+    # --------------------------------------------------------
+
+    sim_swap_stream = (
+        timed_valid_stream
+        .key_by(
+            lambda value: json.loads(value)["customer_id"]
+        )
+        .process(
+            SimSwapRiskDetector(),
+            output_type=Types.STRING(),
+        )
+    )
+
+    # --------------------------------------------------------
+    # G. Impossible travel fraud detection
+    # --------------------------------------------------------
+
+    impossible_travel_stream = (
+        timed_valid_stream
+        .key_by(
+            lambda value: json.loads(value)["customer_id"]
+        )
+        .process(
+            ImpossibleTravelDetector(),
+            output_type=Types.STRING(),
+        )
+    )
+
+    # --------------------------------------------------------
+    # H. Usage spike fraud detection
+    # --------------------------------------------------------
+
+    usage_spike_stream = (
+        timed_valid_stream
+        .key_by(
+            lambda value: json.loads(value)["customer_id"]
+        )
+        .process(
+            UsageSpikeDetector(),
+            output_type=Types.STRING(),
+        )
+    )
+
+    # --------------------------------------------------------
+    # I. Country-level one-minute usage aggregation
+    #
+    # The keyed process function groups by country, stores minute buckets,
+    # and emits each bucket after the allowed-lateness period.
+
+    usage_aggregates_stream = (
+        timed_valid_stream
+        .filter(
+            lambda value: json.loads(value)["event_type"] == "DATA_USAGE"
+        )
+        .key_by(
+            lambda value: json.loads(value)["country_code"]
+        )
+        .process(
+            UsageCountryMinuteAggregator(),
+            output_type=Types.STRING(),
+        )
+    )
+
+    late_usage_stream = usage_aggregates_stream.get_side_output(
+        LATE_USAGE_TAG
+    )
+
+    # J. Publish usage aggregates and late events
+    # --------------------------------------------------------
+
+    usage_aggregates_stream.sink_to(
+        create_kafka_sink(
+            USAGE_AGGREGATES_TOPIC
+        )
+    )
 
     late_usage_stream.sink_to(
-    build_kafka_sink(LATE_USAGE_TOPIC)
-    ).name("Write Late Usage Events to Kafka")  
-    
-    # Write fraud alerts to Kafka.
+        create_kafka_sink(
+            LATE_USAGE_TOPIC
+        )
+    )
+
+    # --------------------------------------------------------
+    # K. Publish all four fraud alert streams
+    # --------------------------------------------------------
+
     topup_stream.sink_to(
-        build_kafka_sink(FRAUD_ALERTS_TOPIC)
-    ).name("Write Fraud Alerts to Kafka")
+        create_kafka_sink(
+            FRAUD_ALERTS_TOPIC
+        )
+    )
 
-    # Write the invalid events to a Kafka topic.
+    sim_swap_stream.sink_to(
+        create_kafka_sink(
+            FRAUD_ALERTS_TOPIC
+        )
+    )
+
+    impossible_travel_stream.sink_to(
+        create_kafka_sink(
+            FRAUD_ALERTS_TOPIC
+        )
+    )
+
+    usage_spike_stream.sink_to(
+        create_kafka_sink(
+            FRAUD_ALERTS_TOPIC
+        )
+    )
+
+    # --------------------------------------------------------
+    # L. Publish invalid events to the dead-letter topic
+    # --------------------------------------------------------
+
     invalid_stream.sink_to(
-        build_kafka_sink(DLQ_TOPIC)
-    ).name("Write Invalid Events to Dead Letter Topic")
+        create_kafka_sink(DLQ_TOPIC)
+    )
 
-    env.execute("Telecom Event Parsing and Validation")
+    # --------------------------------------------------------
+    # M. Start the Flink job
+    # --------------------------------------------------------
+
+    env.execute(
+        "Telecom Event Validation Usage and Fraud Detection"
+    )
 
 
 if __name__ == "__main__":
