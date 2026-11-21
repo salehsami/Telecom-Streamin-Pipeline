@@ -612,6 +612,7 @@ class TopUpVelocityDetector(KeyedProcessFunction):
             ctx.timer_service().register_event_time_timer(
                 next_expiry
             )
+        return []
 
 
 # ============================================================
@@ -829,6 +830,7 @@ class SimSwapRiskDetector(KeyedProcessFunction):
             self.device_change_event_id.clear()
             self.new_device_id_state.clear()
             self.alerted_state.clear()
+        return []
 
 
 # ============================================================
@@ -1230,6 +1232,7 @@ class UsageSpikeDetector(KeyedProcessFunction):
             ctx.timer_service().register_event_time_timer(
                 next_expiry
             )
+        return []
 
 
 # ============================================================
