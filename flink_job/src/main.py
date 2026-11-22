@@ -79,13 +79,6 @@ INVALID_EVENTS_TAG = OutputTag(
     Types.STRING(),
 )
 
-# The usage aggregator emits late events as JSON strings.
-LATE_USAGE_TAG = OutputTag(
-    "late-usage-events",
-    Types.STRING(),
-)
-
-
 # ============================================================
 # 3. VALIDATION HELPERS
 # ============================================================
@@ -199,12 +192,13 @@ def build_fraud_alert(
 # 4. KAFKA EVENT PARSING AND VALIDATION
 # ============================================================
 
+
 class ParseAndValidateTelecomEvent(ProcessFunction):
     """
     Parse raw Kafka JSON and separate valid from invalid events.
 
-    Valid events continue through the main pipeline.
-    Invalid events are sent to the DLQ side output.
+    Both record types travel through the main stream using an envelope.
+    They are split into separate streams downstream.
     """
 
     def process_element(self, value, ctx):
@@ -213,14 +207,15 @@ class ParseAndValidateTelecomEvent(ProcessFunction):
             event = json.loads(value)
 
         except (json.JSONDecodeError, TypeError) as exc:
-            ctx.output(
-                INVALID_EVENTS_TAG,
-                json.dumps(
-                    {
+            yield json.dumps(
+                {
+                    "record_type": "invalid",
+                    "record": {
                         "raw_event": value,
                         "errors": [f"Invalid JSON: {exc}"],
-                    }
-                ),
+                    },
+                },
+                separators=(",", ":"),
             )
             return
 
@@ -251,10 +246,7 @@ class ParseAndValidateTelecomEvent(ProcessFunction):
                             "schema_version must be an integer"
                         )
 
-                elif not isinstance(
-                    field_value,
-                    expected_type,
-                ):
+                elif not isinstance(field_value, expected_type):
                     errors.append(
                         f"{field} must be "
                         f"{expected_type.__name__}"
@@ -265,17 +257,13 @@ class ParseAndValidateTelecomEvent(ProcessFunction):
                     "Unsupported schema_version; expected 1"
                 )
 
-            if not is_valid_timestamp(
-                event.get("event_time")
-            ):
+            if not is_valid_timestamp(event.get("event_time")):
                 errors.append(
                     "event_time must be a valid "
                     "timezone-aware ISO-8601 timestamp"
                 )
 
-            if not is_valid_timestamp(
-                event.get("ingested_at")
-            ):
+            if not is_valid_timestamp(event.get("ingested_at")):
                 errors.append(
                     "ingested_at must be a valid "
                     "timezone-aware ISO-8601 timestamp"
@@ -304,25 +292,26 @@ class ParseAndValidateTelecomEvent(ProcessFunction):
                 errors.append("customer_id cannot be empty")
 
         if errors:
-            ctx.output(
-                INVALID_EVENTS_TAG,
-                json.dumps(
-                    {
+            yield json.dumps(
+                {
+                    "record_type": "invalid",
+                    "record": {
                         "raw_event": value,
                         "errors": errors,
                     },
-                    separators=(",", ":"),
-                ),
+                },
+                separators=(",", ":"),
             )
             return
 
         yield json.dumps(
             {
-                "is_valid": True,
-                "event": event,
+                "record_type": "valid",
+                "record": event,
             },
             separators=(",", ":"),
         )
+
 
 
 # ============================================================
@@ -400,18 +389,18 @@ class UsageCountryMinuteAggregator(KeyedProcessFunction):
 
         current_watermark = ctx.timer_service().current_watermark()
         if current_watermark > cleanup_timestamp:
-            ctx.output(
-                LATE_USAGE_TAG,
-                json.dumps(
-                    {
+            yield json.dumps(
+                {
+                    "record_type": "late_usage",
+                    "record": {
                         "country_code": event["country_code"],
                         "event": event,
                         "reason": "Received after the allowed event-time lateness period",
                     },
-                    separators=(",", ":"),
-                ),
+                },
+                separators=(",", ":"),
             )
-            return
+            return        
 
         buckets = list(self.windows_state.get())
         event_id = event["event_id"]
@@ -463,7 +452,14 @@ class UsageCountryMinuteAggregator(KeyedProcessFunction):
                     "event_count": event_count,
                     "contributing_event_ids": json.loads(event_ids_json),
                 }
-                yield json.dumps(result, separators=(",", ":"))
+                yield json.dumps(
+                    {
+                        "record_type": "aggregate",
+                        "record": result,
+                    },
+                    separators=(",", ":"),
+                )
+
             else:
                 remaining_buckets.append(
                     (window_start, total_mb, event_count, event_ids_json)
@@ -1306,22 +1302,34 @@ def main():
         output_type=Types.STRING(),
     )
 
+    # Extract valid events and restore their original JSON format.
     valid_stream = (
         parsed_stream
         .filter(
-            lambda record: json.loads(record)["is_valid"]
+            lambda record: json.loads(record)["record_type"] == "valid"
         )
         .map(
             lambda record: json.dumps(
-                json.loads(record)["event"],
+                json.loads(record)["record"],
                 separators=(",", ":"),
             ),
-        output_type=Types.STRING(),
+            output_type=Types.STRING(),
         )
     )
 
-    invalid_stream = parsed_stream.get_side_output(
-        INVALID_EVENTS_TAG
+    # Extract invalid events for the dead-letter queue.
+    invalid_stream = (
+        parsed_stream
+        .filter(
+            lambda record: json.loads(record)["record_type"] == "invalid"
+        )
+        .map(
+            lambda record: json.dumps(
+                json.loads(record)["record"],
+                separators=(",", ":"),
+            ),
+            output_type=Types.STRING(),
+        )
     )
 
     # --------------------------------------------------------
@@ -1420,7 +1428,7 @@ def main():
     # The keyed process function groups by country, stores minute buckets,
     # and emits each bucket after the allowed-lateness period.
 
-    usage_aggregates_stream = (
+    usage_output_stream = (
         timed_valid_stream
         .filter(
             lambda value: json.loads(value)["event_type"] == "DATA_USAGE"
@@ -1434,24 +1442,45 @@ def main():
         )
     )
 
-    late_usage_stream = usage_aggregates_stream.get_side_output(
-        LATE_USAGE_TAG
+    # Separate normal aggregates from late events.
+    usage_aggregates_stream = (
+        usage_output_stream
+        .filter(
+            lambda value: json.loads(value)["record_type"] == "aggregate"
+        )
+        .map(
+            lambda value: json.dumps(
+                json.loads(value)["record"],
+                separators=(",", ":"),
+            ),
+            output_type=Types.STRING(),
+        )
+    )
+
+    late_usage_stream = (
+        usage_output_stream
+        .filter(
+            lambda value: json.loads(value)["record_type"] == "late_usage"
+        )
+        .map(
+            lambda value: json.dumps(
+                json.loads(value)["record"],
+                separators=(",", ":"),
+            ),
+            output_type=Types.STRING(),
+        )
     )
 
     # J. Publish usage aggregates and late events
     # --------------------------------------------------------
 
     usage_aggregates_stream.sink_to(
-        create_kafka_sink(
-            USAGE_AGGREGATES_TOPIC
-        )
+        create_kafka_sink(USAGE_AGGREGATES_TOPIC)
     )
 
     late_usage_stream.sink_to(
-        create_kafka_sink(
-            LATE_USAGE_TOPIC
-        )
-    )
+        create_kafka_sink(LATE_USAGE_TOPIC)
+    ) 
 
     # --------------------------------------------------------
     # K. Publish all four fraud alert streams
