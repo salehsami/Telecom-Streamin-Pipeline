@@ -83,3 +83,24 @@ services:
 
     depends_on:
       - jobmanager
+
+  
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    container_name: telecom-clickhouse
+    hostname: clickhouse
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
+    environment:
+      CLICKHOUSE_DB: telecom
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    depends_on:
+      - kafka
+
+volumes:
+  clickhouse_data:
+  clickhouse_logs:
