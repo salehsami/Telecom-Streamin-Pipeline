@@ -84,12 +84,12 @@ ORDER BY hour;
 
 SELECT
     country_code,
-    round(sum(total_megabytes), 2) AS total_megabytes,
-    round(sum(total_megabytes) / 1024, 2) AS total_gigabytes,
+    round(sum(total_megabytes), 2) AS total_mb,
+    round(sum(total_megabytes) / 1024, 2) AS total_gb,
     sum(event_count) AS total_events
 FROM telecom.usage_aggregates
 GROUP BY country_code
-ORDER BY total_megabytes DESC;
+ORDER BY total_mb DESC;
 
 
 -- 7. USAGE: Consumption over time

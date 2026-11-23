@@ -101,6 +101,21 @@ services:
     depends_on:
       - kafka
 
+  grafana:
+    image: grafana/grafana:12.4.0
+    container_name: telecom-grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_PLUGINS_PREINSTALL: grafana-clickhouse-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - clickhouse
+
+
 volumes:
   clickhouse_data:
   clickhouse_logs:
+  grafana_data:
