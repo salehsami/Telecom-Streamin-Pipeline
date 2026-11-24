@@ -48,8 +48,8 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
-        "w": 12,
+        "h": 6,
+        "w": 6,
         "x": 0,
         "y": 0
       },
@@ -109,6 +109,7 @@
           "color": {
             "mode": "thresholds"
           },
+          "decimals": 0,
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -122,14 +123,15 @@
                 "value": 80
               }
             ]
-          }
+          },
+          "unit": "none"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 4,
-        "w": 12,
-        "x": 12,
+        "h": 6,
+        "w": 6,
+        "x": 6,
         "y": 0
       },
       "id": 2,
@@ -184,6 +186,156 @@
           "color": {
             "mode": "thresholds"
           },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 7,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.0",
+      "targets": [
+        {
+          "editorType": "sql",
+          "format": 1,
+          "meta": {
+            "builderOptions": {
+              "columns": [],
+              "database": "",
+              "limit": 1000,
+              "mode": "list",
+              "queryType": "table",
+              "table": ""
+            }
+          },
+          "pluginVersion": "4.23.5",
+          "queryType": "table",
+          "rawSql": "SELECT countIf(severity = 'MEDIUM') AS value\r\nFROM telecom.fraud_alerts\r\nWHERE $__timeFilter(detected_at)",
+          "refId": "A"
+        }
+      ],
+      "title": "Medium Alerts",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "dg537j4qxs4qoc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 8,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.0",
+      "targets": [
+        {
+          "editorType": "sql",
+          "format": 1,
+          "meta": {
+            "builderOptions": {
+              "columns": [],
+              "database": "",
+              "limit": 1000,
+              "mode": "list",
+              "queryType": "table",
+              "table": ""
+            }
+          },
+          "pluginVersion": "4.23.5",
+          "queryType": "table",
+          "rawSql": "SELECT countIf(severity = 'HIGH') AS value\r\nFROM telecom.fraud_alerts\r\nWHERE $__timeFilter(detected_at)",
+          "refId": "A"
+        }
+      ],
+      "title": "High Alerts",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "dg537j4qxs4qoc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
@@ -215,7 +367,7 @@
               },
               {
                 "color": "red",
-                "value": 80
+                "value": 3000
               }
             ]
           }
@@ -223,10 +375,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 16,
-        "w": 24,
+        "h": 17,
+        "w": 11,
         "x": 0,
-        "y": 4
+        "y": 6
       },
       "id": 3,
       "options": {
@@ -238,10 +390,10 @@
           "calcs": [],
           "displayMode": "list",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "orientation": "auto",
-        "showValue": "auto",
+        "showValue": "always",
         "stacking": "none",
         "tooltip": {
           "hideZeros": false,
@@ -283,45 +435,50 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
           "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "footer": {
-              "reducers": []
-            },
-            "inspect": false
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
           },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
+          "mappings": []
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 20
+        "h": 17,
+        "w": 13,
+        "x": 11,
+        "y": 6
       },
-      "id": 4,
+      "id": 10,
       "options": {
-        "cellHeight": "sm",
-        "showHeader": true
+        "displayLabels": [
+          "name",
+          "percent"
+        ],
+        "legend": {
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true
+        },
+        "pieType": "pie",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        },
+        "sort": "desc",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
       },
       "pluginVersion": "12.4.0",
       "targets": [
@@ -340,12 +497,12 @@
           },
           "pluginVersion": "4.23.5",
           "queryType": "table",
-          "rawSql": "SELECT\r\n    customer_id,\r\n    uniqExact(alert_id) AS total_alerts,\r\n    uniqExactIf(alert_id, severity = 'CRITICAL') AS critical_alerts,\r\n    uniqExactIf(alert_id, severity = 'HIGH') AS high_alerts\r\nFROM telecom.fraud_alerts\r\nGROUP BY customer_id\r\nORDER BY total_alerts DESC\r\nLIMIT 10",
+          "rawSql": "SELECT\r\n    severity,\r\n    count() AS alerts\r\nFROM telecom.fraud_alerts\r\nWHERE $__timeFilter(detected_at)\r\nGROUP BY severity\r\nORDER BY alerts DESC",
           "refId": "A"
         }
       ],
-      "title": "Top 10 Affected Customers",
-      "type": "table"
+      "title": "Fraud Alerts by Severity",
+      "type": "piechart"
     },
     {
       "datasource": {
@@ -357,27 +514,7 @@
           "color": {
             "mode": "thresholds"
           },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "fillOpacity": 80,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineWidth": 1,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
+          "decimals": 2,
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
@@ -388,41 +525,37 @@
               },
               {
                 "color": "red",
-                "value": 80
+                "value": 90000
               }
             ]
-          }
+          },
+          "unit": "decgbytes"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 11,
-        "w": 24,
+        "h": 8,
+        "w": 12,
         "x": 0,
-        "y": 28
+        "y": 23
       },
-      "id": 5,
+      "id": 14,
       "options": {
-        "barRadius": 0,
-        "barWidth": 0.97,
-        "fullHighlight": false,
-        "groupWidth": 0.7,
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
         "orientation": "auto",
-        "showValue": "auto",
-        "stacking": "none",
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
         },
-        "xTickLabelRotation": 0,
-        "xTickLabelSpacing": 0
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
       },
       "pluginVersion": "12.4.0",
       "targets": [
@@ -441,12 +574,89 @@
           },
           "pluginVersion": "4.23.5",
           "queryType": "table",
-          "rawSql": "SELECT\r\n    country_code,\r\n    round(sum(total_megabytes), 2) AS total_mb\r\nFROM telecom.usage_aggregates\r\nGROUP BY country_code\r\nORDER BY total_mb DESC",
+          "rawSql": "SELECT\r\n    round(sum(total_megabytes) / 1024, 2) AS value\r\nFROM telecom.usage_aggregates\r\nWHERE $__timeFilter(window_start)",
           "refId": "A"
         }
       ],
-      "title": "Data Consumption by Country",
-      "type": "barchart"
+      "title": "Total Data Consumption",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "dg537j4qxs4qoc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "id": 15,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.0",
+      "targets": [
+        {
+          "editorType": "sql",
+          "format": 1,
+          "meta": {
+            "builderOptions": {
+              "columns": [],
+              "database": "",
+              "limit": 1000,
+              "mode": "list",
+              "queryType": "table",
+              "table": ""
+            }
+          },
+          "pluginVersion": "4.23.5",
+          "queryType": "table",
+          "rawSql": "SELECT\r\n    sum(event_count) AS value\r\nFROM telecom.usage_aggregates\r\nWHERE $__timeFilter(window_start)",
+          "refId": "A"
+        }
+      ],
+      "title": "Underlying Usage Events",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -506,15 +716,15 @@
               }
             ]
           },
-          "unit": "decmbytes"
+          "unit": "decgbytes"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 9,
-        "w": 24,
+        "h": 15,
+        "w": 13,
         "x": 0,
-        "y": 39
+        "y": 31
       },
       "id": 6,
       "options": {
@@ -547,29 +757,311 @@
           },
           "pluginVersion": "4.23.5",
           "queryType": "timeseries",
-          "rawSql": "SELECT\r\n    window_start AS time,\r\n    country_code,\r\n    sum(total_megabytes) AS total_mb\r\nFROM telecom.usage_aggregates\r\nWHERE $__timeFilter(window_start)\r\nGROUP BY time, country_code\r\nORDER BY time",
+          "rawSql": "SELECT\r\n    toStartOfInterval(window_start, INTERVAL 5 MINUTE) AS time,\r\n    country_code,\r\n    sum(total_megabytes) / 1024 AS total_gb\r\nFROM telecom.usage_aggregates\r\nWHERE $__timeFilter(window_start)\r\nGROUP BY time, country_code\r\nORDER BY time",
           "refId": "A"
         }
       ],
       "title": "Telecom Usage Over Time",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "dg537j4qxs4qoc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "footer": {
+              "reducers": []
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 25
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 11,
+        "x": 13,
+        "y": 31
+      },
+      "id": 4,
+      "options": {
+        "cellHeight": "sm",
+        "enablePagination": false,
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "total_alerts"
+          }
+        ]
+      },
+      "pluginVersion": "12.4.0",
+      "targets": [
+        {
+          "editorType": "sql",
+          "format": 1,
+          "meta": {
+            "builderOptions": {
+              "columns": [],
+              "database": "",
+              "limit": 1000,
+              "mode": "list",
+              "queryType": "table",
+              "table": ""
+            }
+          },
+          "pluginVersion": "4.23.5",
+          "queryType": "table",
+          "rawSql": "SELECT\r\n    customer_id,\r\n    count() AS total_alerts,\r\n    countIf(severity = 'CRITICAL') AS critical_alerts,\r\n    countIf(severity = 'HIGH') AS high_alerts\r\nFROM telecom.fraud_alerts\r\nWHERE $__timeFilter(detected_at)\r\nGROUP BY customer_id\r\nORDER BY total_alerts DESC\r\nLIMIT 10",
+          "refId": "A"
+        }
+      ],
+      "title": "Top 10 Affected Customers",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "dg537j4qxs4qoc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 20400
+              }
+            ]
+          },
+          "unit": "decgbytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 13,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "id": 5,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "showValue": "always",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "12.4.0",
+      "targets": [
+        {
+          "editorType": "sql",
+          "format": 1,
+          "meta": {
+            "builderOptions": {
+              "columns": [],
+              "database": "",
+              "limit": 1000,
+              "mode": "list",
+              "queryType": "table",
+              "table": ""
+            }
+          },
+          "pluginVersion": "4.23.5",
+          "queryType": "table",
+          "rawSql": "SELECT\r\n    country_code,\r\n    round(sum(total_megabytes) / 1024, 2) AS total_gb\r\nFROM telecom.usage_aggregates\r\nWHERE $__timeFilter(window_start)\r\nGROUP BY country_code\r\nORDER BY total_gb DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Data Consumption by Country",
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "dg537j4qxs4qoc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 1,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 5000
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 59
+      },
+      "id": 12,
+      "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "auto",
+        "showValue": "always",
+        "stacking": "none",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "12.4.0",
+      "targets": [
+        {
+          "editorType": "sql",
+          "format": 1,
+          "meta": {
+            "builderOptions": {
+              "columns": [],
+              "database": "",
+              "limit": 1000,
+              "mode": "list",
+              "queryType": "table",
+              "table": ""
+            }
+          },
+          "pluginVersion": "4.23.5",
+          "queryType": "table",
+          "rawSql": "SELECT\r\n    country_code,\r\n    count() AS alerts\r\nFROM telecom.fraud_alerts\r\nWHERE $__timeFilter(detected_at)\r\nGROUP BY country_code\r\nORDER BY alerts DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Fraud Alerts by Country",
+      "type": "barchart"
     }
   ],
   "preload": false,
-  "refresh": "auto",
+  "refresh": "5m",
   "schemaVersion": 42,
   "tags": [],
   "templating": {
     "list": []
   },
   "time": {
-    "from": "now-7d",
+    "from": "now-12h",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "browser",
   "title": "Telecom Fraud & Usage Intelligence",
   "uid": "adc6fbh",
-  "version": 17,
+  "version": 40,
   "weekStart": ""
 }

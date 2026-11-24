@@ -1,360 +1,286 @@
 # Real-Time Telecom Fraud & Usage Intelligence Pipeline
 
-> A personal project demonstrating event-driven ingestion, stateful stream processing, late-data handling, real-time analytics, observability, and ML-ready feature engineering.
+A locally deployed, end-to-end streaming data pipeline that ingests synthetic telecom events, processes them with Apache Flink, detects suspicious activity, aggregates usage data, and makes the results available through ClickHouse and Grafana.
+
+**Python · Apache Kafka · Apache Flink · ClickHouse · Grafana · Docker Compose**
 
 ---
 
-## 1. Project vision
+## Project overview
 
-Telecom systems continuously produce calls, SMS, mobile-data usage, account logins, top-ups, SIM swaps, device changes, and payment events. Valuable signals are hidden across these event streams: abnormal usage, account takeover, top-up abuse, impossible travel, and activity following a SIM swap.
-This project builds a local, end-to-end streaming pipeline that generates realistic telecom events, transports them through Kafka, processes them with Apache Flink using event time and keyed state, persists analytics-ready results in ClickHouse, and presents operational and fraud insights in Grafana.
-The project is intentionally designed as a **credible two-week MVP**, not a miniature telecom company. Every component must demonstrate a specific data engineering capability.
+Telecom platforms continuously generate events such as mobile data usage, calls, SMS, logins, top-ups, SIM swaps, and device changes.
 
-## 2. End goal
+This project explores how those events can be processed as continuous streams to identify suspicious behavior and produce useful operational analytics.
 
-By completion, one command should launch the stack and a second command should start a reproducible scenario in which:
+What started as an empty project became a connected pipeline covering:
 
-1. A Python producer emits normal traffic plus controlled duplicates, late events, out-of-order events, and fraud scenarios.
-2. Kafka durably transports raw and processed events through versioned topics.
-3. Flink validates, deduplicates, applies event-time windows and stateful detection rules, and routes invalid records to a dead-letter topic.
-4. ClickHouse receives curated events, fraud alerts, and customer-level streaming features.
-5. Grafana displays live usage, alert, throughput, latency, and data-quality views.
-6. An automated benchmark produces honest measurements for throughput, latency, late events, duplicates, and detected scenarios.
-7. The repository explains the architecture, trade-offs, failure handling, and measured results well enough to discuss in a technical interview.
+- Synthetic telecom event generation.
+- Kafka-based event ingestion and partitioning.
+- Stateful stream processing with Apache Flink.
+- Event validation and fraud/risk detection.
+- Usage aggregation by country and time window.
+- Analytical storage in ClickHouse.
+- Dashboard visualisation through Grafana.
 
-The final result should prove more than “Kafka runs on my laptop.” It should show that the pipeline behaves correctly when streaming data is imperfect.
+The project uses synthetic data and runs locally through Docker Compose. It is a practical data engineering implementation, not a production telecom deployment.
+
+## Project results
+
+The following figures were observed during the current development run. They are not benchmark claims.
+
+| Metric | Observed result |
+|---|---:|
+| Fraud alerts stored in ClickHouse | **13,479** |
+| Underlying usage events represented in aggregates | **166,724** |
+| Usage aggregation records | **396** |
+| Reported data volume | **Approximately 83.36 million MB** |
+| Raw Kafka topic partitions | **3** |
+| Flink source records received in captured UI | **308,503** |
+
+The figures come from different components and measurements. They should not be interpreted as a single end-to-end event count.
 
 ---
 
-## 3. Architecture
+## Dashboard
 
-```
+The Grafana dashboard brings the processed data into a visual interface, making fraud alerts and telecom usage patterns easier to inspect.
+
+![Telecom fraud and usage dashboard](docs/v1/1.1.%20Screenshot%202026-11-24%20021205.png)
+
+### Additional dashboard views
+
+![Dashboard view 1.1.1](docs/v1/1.1.1%20Screenshot%202026-11-24%20023428.png)
+
+![Dashboard view 2](docs/v1/2.%20Screenshot%202026-11-24%20021102.png)
+
+![Dashboard view 3](docs/v1/3.%20Screenshot%202026-11-24%20021320.png)
+
+---
+
+## Architecture
+
+```mermaid
 flowchart TB
-    A["Python event generator"] --> B["Kafka: raw events"]
-    B --> C["Apache Flink"]
-    C --> D["Kafka: curated events"]
-    C --> E["Kafka: fraud alerts"]
-    C --> F["Kafka: dead-letter events"]
-    D --> G["ClickHouse"]
-    E --> G
-    G --> H["Grafana dashboards"]
-    C -. metrics .-> I["Prometheus"]
-    B -. metrics .-> I
-    I --> H
+    A["Python Telecom Event Generator"]
+    B["Apache Kafka<br/>Raw Events"]
+    C["Apache Flink<br/>Stream Processing"]
+    D["Kafka<br/>Valid Events"]
+    E["Kafka<br/>Fraud Alerts"]
+    F["Kafka<br/>Dead-Letter Events"]
+    G["Kafka<br/>Usage Aggregates"]
+    H["ClickHouse"]
+    I["Grafana"]
+
+    A --> B
+    B --> C
+    C --> D
+    C --> E
+    C --> F
+    C --> G
+    D --> H
+    E --> H
+    G --> H
+    H --> I
 ```
 
-### Data path
+### Data flow
 
-| StageResponsibilityEvidence produced |                                                            |                                                           |
-| ------------------------------------ | ---------------------------------------------------------- | --------------------------------------------------------- |
-| Event generator                      | Emit deterministic normal and suspicious scenarios         | Reproducible scenario IDs and configurable rates          |
-| Kafka                                | Buffer, partition, retain, and replay events               | Topics, partitions, offsets, consumer lag                 |
-| Flink                                | Validate, deduplicate, enrich, window, and detect patterns | Checkpoints, watermarks, side outputs, stateful rules     |
-| ClickHouse                           | Serve low-latency analytical queries                       | Curated event, alert, and feature tables                  |
-| Grafana                              | Communicate business and system behavior                   | Provisioned, screenshot-ready dashboards                  |
-| Prometheus                           | Collect infrastructure and processing metrics              | Throughput, lag, failures, checkpoint and latency metrics |
+1. A Python generator creates synthetic telecom events.
+2. Kafka receives and distributes the raw events across partitions.
+3. Flink consumes the stream and applies validation, processing, and detection logic.
+4. Processed events are routed to dedicated Kafka topics.
+5. ClickHouse consumes the analytical outputs and stores them for querying.
+6. Grafana visualises fraud alerts and usage aggregates.
 
 ---
 
-## 4. Core technology choices
+## Technical evidence
 
-| ToolRoleWhy it belongs                |                                              |                                                                                                    |
-| ------------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Python                                | Generator, test harness, and utility scripts | Fast synthetic-data development and reproducible test scenarios                                    |
-| Apache Kafka in KRaft mode            | Distributed event log                        | Demonstrates topics, partitions, offsets, consumer groups, retention, and replay without ZooKeeper |
-| Apache Flink / PyFlink DataStream API | Stateful stream processing                   | Demonstrates event time, watermarks, windows, keyed state, timers, checkpoints, and side outputs   |
-| ClickHouse                            | Real-time analytical store                   | Fast aggregation over high-volume event data and a natural source for live dashboards              |
-| Grafana                               | Visualization                                | Provides recruiter-friendly live and screenshot views without building a custom frontend           |
-| Prometheus                            | Operational metrics                          | Separates pipeline observability from business analytics                                           |
-| Docker Compose                        | Local runtime                                | Reproducible, zero-cloud-cost environment with one-command startup                                 |
-| JSON Schema or Pydantic models        | Data contract and validation                 | Makes event shape, required fields, and schema versions explicit                                   |
-| pytest                                | Unit and integration testing                 | Verifies generator logic, transformations, rules, and edge cases                                   |
-| GitHub Actions                        | CI                                           | Runs formatting, linting, unit tests, and configuration validation on every change                 |
-| Ruff + mypy                           | Python quality                               | Keeps the codebase consistent and type-aware                                                       |
+### Kafka: topics and partitions
 
-### Deliberate exclusions from the MVP
+Kafka separates the incoming events and processed outputs into dedicated topics.
 
-No Kubernetes, Terraform, cloud deployment, Redis, Iceberg, custom React application, paid API, or heavy ML model is required. These tools do not improve the core streaming story enough to justify the extra time.
+The raw event topic, `telecom.raw.events.v1`, is configured with three partitions and replication factor one.
 
----
+![Kafka topics and partitions](docs/Kafka%20topics%20and%20partitions.png)
 
-## 5. Event design
+The project topics include:
 
-### Initial event types
+| Topic | Purpose |
+|---|---|
+| `telecom.raw.events.v1` | Incoming source events |
+| `telecom.valid.events.v1` | Validated events |
+| `telecom.dlq.events.v1` | Invalid events |
+| `telecom.fraud.alerts.v1` | Fraud and risk alerts |
+| `telecom.usage.country.minute.v1` | Country-level usage aggregates |
+| `telecom.usage.late-events.v1` | Late-arriving events |
 
-- `DATA_USAGE`
-- `CALL_COMPLETED`
-- `SMS_SENT`
-- `TOP_UP_ATTEMPT`
-- `LOGIN`
-- `SIM_SWAP`
-- `DEVICE_CHANGE`
-- `PAYMENT_ATTEMPT`
+### Apache Flink: running stream processing
 
-### Common event envelope
+The Flink job connects to the Kafka source and processes the incoming event stream.
 
-```
-{
-  "schema_version": 1,
-  "event_id": "01J...",
-  "scenario_id": "sim-swap-risk-0042",
-  "event_type": "TOP_UP_ATTEMPT",
-  "event_time": "2026-09-18T10:41:32.381Z",
-  "ingested_at": "2026-09-18T10:41:33.014Z",
-  "customer_id": "C0010291",
-  "country_code": "BE",
-  "device_id": "D008392",
-  "payload": {
-    "amount": 250.0,
-    "currency": "EUR",
-    "status": "APPROVED"
-  }
-}
-```
+![Flink streams running](docs/Flink%20streams%20Running.png)
 
-The generator must support a seed so the same test run can be reproduced. Event time and ingestion time remain separate so lateness and end-to-end latency can be measured honestly.
+The captured Flink UI showed:
 
-### Kafka topics
+- The stream-processing job in `RUNNING` state.
+- 308,503 records received by the source operator at the time of capture.
+- Multiple downstream operators handling the processing branches.
 
-| TopicPurposeSuggested key      |                                     |               |
-| ------------------------------ | ----------------------------------- | ------------- |
-| `telecom.raw.events.v1`        | Immutable source events             | `customer_id` |
-| `telecom.curated.events.v1`    | Validated and deduplicated events   | `customer_id` |
-| `telecom.fraud.alerts.v1`      | Detected fraud/risk alerts          | `customer_id` |
-| `telecom.customer.features.v1` | Windowed ML-ready features          | `customer_id` |
-| `telecom.dlq.events.v1`        | Invalid records with failure reason | `event_id`    |
+### Processing activity
 
-Keying by customer preserves per-customer ordering within a partition and lets Flink maintain keyed customer state.
+![Flink processing in action](docs/Processing%20in%20action.png)
+
+These screenshots document the running system and its processing activity at the time they were captured.
 
 ---
 
-## 6. Streaming behavior to demonstrate
+## Fraud detection
 
-### Data-quality path
+The pipeline implements four rule-based fraud and risk scenarios:
 
-- Validate required fields, timestamps, enums, numeric ranges, and schema version.
-- Route invalid records to the DLQ with the original payload, reason, pipeline stage, and failure timestamp.
-- Deduplicate by `event_id` using keyed state with a time-to-live policy.
-- Keep invalid and duplicate counters visible as operational metrics.
+| Detection rule | Description |
+|---|---|
+| `TOP_UP_VELOCITY` | Identifies unusually frequent top-up attempts |
+| `SIM_SWAP_RISK` | Detects risky activity following a SIM swap |
+| `IMPOSSIBLE_TRAVEL` | Flags logins from distant countries within an implausible interval |
+| `USAGE_SPIKE` | Identifies unusually high data usage |
 
-### Event-time handling
+Each stored alert includes information such as the rule, severity, customer, detection time, contributing event IDs, and evidence.
 
-- Assign timestamps from `event_time`, not ingestion time.
-- Use bounded-out-of-orderness watermarks.
-- Configure an allowed-lateness policy appropriate to the demo.
-- Record events that arrive beyond the accepted lateness boundary rather than silently hiding them.
-- Demonstrate the difference between event time and processing time in the README.
+The current stored alert breakdown is:
 
-### Initial fraud/risk rules
+| Rule | Alerts |
+|---|---:|
+| Impossible travel | 11,441 |
+| Usage spike | 2,015 |
+| Top-up velocity | 19 |
+| SIM-swap risk | 4 |
+| **Total** | **13,479** |
 
-| RuleStream logicOutput |                                                                                            |                     |
-| ---------------------- | ------------------------------------------------------------------------------------------ | ------------------- |
-| Top-up velocity        | At least 5 top-up attempts for a customer within 60 seconds                                | `TOP_UP_VELOCITY`   |
-| SIM-swap risk          | SIM swap followed by a device change and a high-value top-up within 10 minutes             | `SIM_SWAP_RISK`     |
-| Impossible travel      | Login from two distant countries inside a deliberately impossible interval                 | `IMPOSSIBLE_TRAVEL` |
-| Usage spike            | Data usage inside a 10-minute window exceeds a configurable threshold or baseline multiple | `USAGE_SPIKE`       |
-
-Each alert should contain `alert_id`, rule name and version, severity, customer, detection time, event-time window, contributing event IDs, and human-readable evidence.
-Thresholds belong in configuration, not scattered through application code.
-
-### ML-ready streaming features
-
-The pipeline should publish a compact customer feature record such as:
-
-- `topup_attempts_1m`
-- `topup_value_10m`
-- `failed_payments_30m`
-- `data_usage_mb_10m`
-- `unique_devices_24h`
-- `countries_seen_1h`
-- `sim_swaps_7d`
-- `seconds_since_device_change`
-
-This is the Data Science bridge. The MVP does not need a trained model; it needs reliable, well-defined features that a later supervised fraud project can consume.
+These are alerts generated from synthetic scenarios and configured rules. They are not confirmed real-world fraud cases.
 
 ---
 
-## 7. ClickHouse data model
+## Telecom usage analytics
 
-Use a small model with clear responsibilities:
+The pipeline also produces country-level usage aggregates.
 
-| TableGrainPurpose            |                                        |                                         |
-| ---------------------------- | -------------------------------------- | --------------------------------------- |
-| `curated_events`             | One accepted event                     | Audit and usage analytics               |
-| `fraud_alerts`               | One emitted alert                      | Investigation and alert reporting       |
-| `customer_feature_snapshots` | One customer per feature window/update | Offline ML dataset and feature analysis |
-| `dlq_events`                 | One rejected event                     | Data-quality diagnosis                  |
+Current observed data:
 
-Kafka engine tables and materialized views can move records from Kafka into durable MergeTree-family tables. Exact engines, partitioning, order keys, retention, and deduplication behavior should be documented as explicit design choices.
+| Country | Aggregation records | Underlying events |
+|---|---:|---:|
+| Netherlands | 96 | 41,969 |
+| Germany | 96 | 41,848 |
+| Belgium | 108 | 41,507 |
+| France | 96 | 41,400 |
+| **Total** | **396** | **166,724** |
 
----
-
-## 8. Dashboards that make the project visible
-
-### Dashboard A — Telecom operations
-
-- Events per second
-- Total curated events
-- Active customers in the selected interval
-- Data usage by country
-- Event-type distribution
-- Top customers by data consumption
-
-### Dashboard B — Fraud intelligence
-
-- Alerts per minute
-- Alerts by rule and severity
-- Top suspicious customers
-- Recent alert evidence table
-- Fraud scenario detection rate
-
-### Dashboard C — Pipeline health
-
-- Kafka consumer lag
-- End-to-end latency: p50, p95, and p99
-- Invalid and duplicate event counts
-- Late and beyond-lateness event counts
-- Flink checkpoint duration and failures
-- Processing throughput and restart count
-
-Provision dashboards as code so a clean clone does not require manual panel creation.
+The aggregate records contain total data volume and event counts for their respective country and time windows.
 
 ---
 
-## 9. Two-week execution plan
+## Technology stack
 
-| DaysMilestoneDefinition of done |                        |                                                                                                     |
-| ------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------- |
-| 1–2                             | Foundation             | Repository, Docker Compose, Kafka, topic bootstrap, Python producer, health checks                  |
-| 3–4                             | Contracts and bad data | Versioned event model, deterministic scenarios, duplicates, malformed, late and out-of-order events |
-| 5–7                             | Flink core             | Kafka source/sinks, validation, DLQ, event timestamps, watermarks, deduplication, checkpoints       |
-| 8–9                             | Stateful rules         | Four detection rules, alert evidence, configurable thresholds, feature outputs                      |
-| 10–11                           | Serving layer          | ClickHouse ingestion, durable tables, analytical queries, retention decisions                       |
-| 12                              | Observability          | Prometheus metrics and three provisioned Grafana dashboards                                         |
-| 13                              | Verification           | Unit/integration tests, restart/replay test, benchmark script, measured results                     |
-| 14                              | Portfolio finish       | README, architecture diagram, demo recording, screenshots, resume bullets, cleanup                  |
-
-### MVP completion gate
-
-The project is complete when all of the following are true:
-
-- A new user can run it from documented commands.
-- At least 1 million events can be generated in benchmark mode.
-- All four planted fraud scenarios are detected in deterministic acceptance tests.
-- Duplicates do not create duplicate curated outcomes or alerts.
-- Invalid events reach the DLQ with understandable reasons.
-- Out-of-order and late-event behavior is observable and documented.
-- ClickHouse tables and Grafana dashboards update continuously.
-- A controlled Flink restart demonstrates recovery from a checkpoint without silently losing data.
-- Throughput and latency claims are generated from measurements, not invented.
-
-### Stretch goals — only after the MVP
-
-- Schema Registry with Avro or Protobuf compatibility checks
-- Savepoint-driven job upgrade demonstration
-- Property-based testing for event streams
-- Short comparison of rule-based detection versus an offline anomaly model
-- Local object-storage archive for replay
+| Technology | Role |
+|---|---|
+| Python | Synthetic event generation and application logic |
+| Apache Kafka | Event ingestion, topics, and partitioning |
+| Apache Flink | Stateful stream processing |
+| ClickHouse | Analytical storage and querying |
+| Grafana | Dashboard visualisation |
+| Docker Compose | Local service orchestration |
 
 ---
 
-## 10. Repository shape
+## Repository structure
 
-```
+```text
 telecom-streaming-pipeline/
-├── README.md
 ├── docker-compose.yml
-├── Makefile
-├── .env.example
+├── README.md
 ├── configs/
-│   ├── rules.yaml
-│   └── prometheus.yml
 ├── generator/
-│   ├── src/
-│   └── tests/
+│   └── src/
 ├── flink_job/
-│   ├── src/
-│   └── tests/
+│   └── src/
 ├── clickhouse/
 │   └── init/
 ├── grafana/
 │   ├── dashboards/
+│   │   ├── telecom-fraud-detection.json
+│   │   └── v1/
 │   └── provisioning/
-├── scripts/
-│   ├── bootstrap.sh
-│   ├── run_scenario.sh
-│   └── benchmark.sh
 ├── docs/
-│   ├── architecture.md
-│   ├── data-contract.md
-│   ├── design-decisions.md
-│   └── results.md
-└── .github/workflows/ci.yml
-```
-
-Useful developer commands should be memorable:
-
-```
-make up
-make topics
-make run-demo
-make test
-make benchmark
-make down
+│   ├── Flink streams Running.png
+│   ├── Kafka topics and partitions.png
+│   ├── Processing in action.png
+│   └── v1/
+└── scripts/
 ```
 
 ---
 
-## 11. Testing and evidence
+## Running the project
 
-### Tests
+The project uses Docker Compose to run its local services.
 
-- Unit tests for event generation, validation, and each fraud rule
-- Contract tests for supported and rejected schema versions
-- Deterministic end-to-end scenario tests
-- Duplicate, late-event, and out-of-order tests
-- ClickHouse row-count and alert-evidence assertions
-- Recovery test after stopping and restarting the Flink job
+Start the relevant infrastructure:
 
-### Measurements to report
+```bash
+docker compose up -d
+```
 
-- Total events processed
-- Sustained events per second
-- End-to-end p50/p95/p99 latency
-- Duplicate suppression count and rate
-- Invalid/DLQ count and rate
-- Late-event count and handling outcome
-- Planted scenarios detected versus missed
-- False alerts in the controlled normal dataset
-- Checkpoint duration and recovery result
+Build the Flink containers when the job image or dependencies change:
 
-Always state the laptop hardware, event rate, number of Kafka partitions, Flink parallelism, run duration, and measurement method beside performance numbers.
+```bash
+docker compose build jobmanager taskmanager
+```
+
+Submit the Flink job:
+
+```bash
+docker exec telecom-flink-jobmanager flink run -d -py /opt/flink/usrlib/main.py
+```
+
+Check the running job:
+
+```bash
+docker exec telecom-flink-jobmanager flink list
+```
+
+The Flink dashboard is available at:
+
+`http://localhost:8081`
+
+The exact producer and service startup commands may depend on the local environment and project configuration.
 
 ---
 
-## 12. Portfolio presentation standard
+## Current scope and limitations
 
-The repository should lead with outcomes, not installation steps.
+- The pipeline runs locally using Docker Compose.
+- Events are synthetic, not sourced from a telecom operator.
+- Fraud detection is rule-based; a trained ML fraud model is not part of the current implementation.
+- Kafka's raw topic currently uses replication factor one, so it does not provide broker-level replica redundancy.
+- Observed record counts describe specific component outputs and capture times, not a controlled throughput benchmark.
+- Production deployment, high availability, and production-scale performance have not been claimed.
 
-### README opening order
+---
 
-1. One-sentence business problem
-2. Animated GIF or dashboard hero image
-3. Three to five measured results
-4. Architecture diagram
-5. Fraud scenarios and streaming concepts demonstrated
-6. Reproduction commands
-7. Design decisions, limitations, and trade-offs
+## Future improvements
 
-### Visual assets to publish
+Potential next steps include:
 
-- Clean architecture diagram
-- Grafana operations dashboard screenshot
-- Grafana fraud dashboard screenshot
-- Flink job graph and checkpoint screenshot
-- Short 60–90 second demo video
-- Small table proving planted scenarios and outcomes
+- Benchmarking sustained throughput and end-to-end latency.
+- Expanding automated integration and recovery tests.
+- Improving pipeline health and consumer-lag observability.
+- Building additional customer-level analytical features.
+- Exploring machine-learning-based anomaly detection.
 
-### Honest positioning
+---
 
-Call it a **locally deployed production-style pipeline**, not a production telecom system. Distinguish implemented guarantees from conceptual discussion. Report observed benchmark numbers with the test conditions
+## Project links
+
+**Source code:** [GitHub repository](https://github.com/salehsami/Telecom-Streamin-Pipeline)
+
