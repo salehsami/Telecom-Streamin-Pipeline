@@ -15,55 +15,48 @@
       }
     ]
   },
+  "description": "Real-time telecom fraud detection and network usage analytics \u2014 Kafka \u2192 Flink \u2192 ClickHouse",
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
+  "graphTooltip": 2,
   "links": [],
   "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "panels": [],
+      "title": "Overview",
+      "type": "row"
+    },
+
     {
       "datasource": {
         "type": "grafana-clickhouse-datasource",
         "uid": "dg537j4qxs4qoc"
       },
+      "description": "Total unique fraud alerts in time range with trend sparkline",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
+          "color": { "fixedColor": "#2F54EB", "mode": "fixed" },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
+            "steps": [{ "color": "#2F54EB", "value": null }]
           }
         },
         "overrides": []
       },
-      "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 0,
-        "y": 0
-      },
+      "gridPos": { "h": 5, "w": 5, "x": 0, "y": 1 },
       "id": 1,
       "options": {
-        "colorMode": "value",
+        "colorMode": "background_solid",
         "graphMode": "area",
         "justifyMode": "center",
         "orientation": "auto",
         "percentChangeColorMode": "standard",
         "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
+          "calcs": ["sum"],
           "fields": "",
           "values": false
         },
@@ -79,72 +72,50 @@
             "uid": "dg537j4qxs4qoc"
           },
           "editorType": "sql",
-          "format": 1,
+          "format": 0,
           "meta": {
             "builderOptions": {
-              "columns": [],
-              "database": "",
-              "limit": 1000,
-              "mode": "list",
-              "queryType": "table",
-              "table": ""
+              "columns": [], "database": "", "limit": 1000,
+              "mode": "list", "queryType": "table", "table": ""
             }
           },
           "pluginVersion": "4.23.5",
-          "queryType": "table",
-          "rawSql": "SELECT\r\n    uniqExact(alert_id) AS total_alerts\r\nFROM telecom.fraud_alerts",
+          "queryType": "timeseries",
+          "rawSql": "SELECT\n    toStartOfInterval(detected_at, INTERVAL 10 MINUTE) AS time,\n    uniqExact(alert_id) AS total_alerts\nFROM telecom.fraud_alerts\nWHERE $__timeFilter(detected_at)\nGROUP BY time\nORDER BY time",
           "refId": "A"
         }
       ],
       "title": "Total Fraud Alerts",
       "type": "stat"
     },
+
     {
       "datasource": {
         "type": "grafana-clickhouse-datasource",
         "uid": "dg537j4qxs4qoc"
       },
+      "description": "Critical severity alerts requiring immediate investigation",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
+          "color": { "fixedColor": "#CF1322", "mode": "fixed" },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          },
-          "unit": "none"
+            "steps": [{ "color": "#CF1322", "value": null }]
+          }
         },
         "overrides": []
       },
-      "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 6,
-        "y": 0
-      },
+      "gridPos": { "h": 5, "w": 5, "x": 5, "y": 1 },
       "id": 2,
       "options": {
-        "colorMode": "value",
+        "colorMode": "background_solid",
         "graphMode": "area",
-        "justifyMode": "auto",
+        "justifyMode": "center",
         "orientation": "auto",
         "percentChangeColorMode": "standard",
         "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
+          "calcs": ["sum"],
           "fields": "",
           "values": false
         },
@@ -155,235 +126,525 @@
       "pluginVersion": "12.4.0",
       "targets": [
         {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "dg537j4qxs4qoc"
+          },
           "editorType": "sql",
-          "format": 1,
+          "format": 0,
           "meta": {
             "builderOptions": {
-              "columns": [],
-              "database": "",
-              "limit": 1000,
-              "mode": "list",
-              "queryType": "table",
-              "table": ""
+              "columns": [], "database": "", "limit": 1000,
+              "mode": "list", "queryType": "table", "table": ""
             }
           },
           "pluginVersion": "4.23.5",
-          "queryType": "table",
-          "rawSql": "SELECT\r\n    uniqExact(alert_id) AS critical_alerts\r\nFROM telecom.fraud_alerts\r\nWHERE severity = 'CRITICAL'",
+          "queryType": "timeseries",
+          "rawSql": "SELECT\n    toStartOfInterval(detected_at, INTERVAL 10 MINUTE) AS time,\n    uniqExact(alert_id) AS critical_alerts\nFROM telecom.fraud_alerts\nWHERE severity = 'CRITICAL'\n  AND $__timeFilter(detected_at)\nGROUP BY time\nORDER BY time",
           "refId": "A"
         }
       ],
       "title": "Critical Incidents",
       "type": "stat"
     },
+
     {
       "datasource": {
         "type": "grafana-clickhouse-datasource",
         "uid": "dg537j4qxs4qoc"
       },
+      "description": "High severity alerts with trend",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
+          "color": { "fixedColor": "#D46B08", "mode": "fixed" },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
+            "steps": [{ "color": "#D46B08", "value": null }]
           }
         },
         "overrides": []
       },
-      "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 12,
-        "y": 0
+      "gridPos": { "h": 5, "w": 4, "x": 10, "y": 1 },
+      "id": 3,
+      "options": {
+        "colorMode": "background_solid",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": ["sum"],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
       },
+      "pluginVersion": "12.4.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "dg537j4qxs4qoc"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "meta": {
+            "builderOptions": {
+              "columns": [], "database": "", "limit": 1000,
+              "mode": "list", "queryType": "table", "table": ""
+            }
+          },
+          "pluginVersion": "4.23.5",
+          "queryType": "timeseries",
+          "rawSql": "SELECT\n    toStartOfInterval(detected_at, INTERVAL 10 MINUTE) AS time,\n    uniqExact(alert_id) AS high_alerts\nFROM telecom.fraud_alerts\nWHERE severity = 'HIGH'\n  AND $__timeFilter(detected_at)\nGROUP BY time\nORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "title": "High Severity",
+      "type": "stat"
+    },
+
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "dg537j4qxs4qoc"
+      },
+      "description": "Percentage of all fraud alerts classified as CRITICAL \u2014 higher means more severe threat landscape",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "max": 100,
+          "min": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "#73BF69", "value": null },
+              { "color": "#FF9830", "value": 40 },
+              { "color": "#F2495C", "value": 70 }
+            ]
+          },
+          "unit": "percent",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 4, "x": 14, "y": 1 },
+      "id": 4,
+      "options": {
+        "minVizWidth": 75,
+        "minVizHeight": 75,
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "auto"
+      },
+      "pluginVersion": "12.4.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "dg537j4qxs4qoc"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "meta": {
+            "builderOptions": {
+              "columns": [], "database": "", "limit": 1000,
+              "mode": "list", "queryType": "table", "table": ""
+            }
+          },
+          "pluginVersion": "4.23.5",
+          "queryType": "table",
+          "rawSql": "SELECT\n    round(\n        uniqExactIf(alert_id, severity = 'CRITICAL') * 100.0\n        / greatest(uniqExact(alert_id), 1),\n    1) AS critical_pct\nFROM telecom.fraud_alerts\nWHERE $__timeFilter(detected_at)",
+          "refId": "A"
+        }
+      ],
+      "title": "Critical Alert Rate",
+      "type": "gauge"
+    },
+
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "dg537j4qxs4qoc"
+      },
+      "description": "Total network data consumption with trend sparkline",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "#08979C", "mode": "fixed" },
+          "decimals": 1,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "#08979C", "value": null }]
+          },
+          "unit": "decgbytes"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 1 },
+      "id": 5,
+      "options": {
+        "colorMode": "background_solid",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": ["sum"],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.4.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "dg537j4qxs4qoc"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "meta": {
+            "builderOptions": {
+              "columns": [], "database": "", "limit": 1000,
+              "mode": "list", "queryType": "table", "table": ""
+            }
+          },
+          "pluginVersion": "4.23.5",
+          "queryType": "timeseries",
+          "rawSql": "SELECT\n    toStartOfInterval(window_start, INTERVAL 10 MINUTE) AS time,\n    round(sum(total_megabytes) / 1024, 2) AS throughput_gb\nFROM telecom.usage_aggregates\nWHERE $__timeFilter(window_start)\nGROUP BY time\nORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "title": "Network Throughput",
+      "type": "stat"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 },
+      "id": 101,
+      "panels": [],
+      "title": "Fraud Detection",
+      "type": "row"
+    },
+
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "dg537j4qxs4qoc"
+      },
+      "description": "Fraud alert volume over time \u2014 stacked by severity to show composition and trend",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Alerts",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.8,
+            "drawStyle": "bars",
+            "fillOpacity": 85,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 0,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": "/CRITICAL/" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FF4D4F", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byRegexp", "options": "/HIGH/" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FF7A45", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byRegexp", "options": "/MEDIUM/" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FFC53D", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 15, "x": 0, "y": 7 },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": ["sum", "mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": { "hideZeros": true, "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "12.4.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "dg537j4qxs4qoc"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "meta": {
+            "builderOptions": {
+              "columns": [], "database": "", "limit": 1000,
+              "mode": "list", "queryType": "table", "table": ""
+            }
+          },
+          "pluginVersion": "4.23.5",
+          "queryType": "timeseries",
+          "rawSql": "SELECT\n    toStartOfInterval(detected_at, INTERVAL 5 MINUTE) AS time,\n    severity,\n    uniqExact(alert_id) AS alerts\nFROM telecom.fraud_alerts\nWHERE $__timeFilter(detected_at)\nGROUP BY time, severity\nORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "title": "Fraud Alert Trend",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "dg537j4qxs4qoc"
+      },
+      "description": "Proportion of fraud alerts by severity level",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false }
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "CRITICAL" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FF4D4F", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "HIGH" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FF7A45", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "MEDIUM" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FFC53D", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 9, "x": 15, "y": 7 },
       "id": 7,
       "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
+        "displayLabels": ["name", "percent"],
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "values": ["value", "percent"]
         },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
+        "pieType": "donut",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": true
+        },
+        "sort": "desc",
+        "tooltip": { "hideZeros": false, "mode": "single", "sort": "none" }
       },
       "pluginVersion": "12.4.0",
       "targets": [
         {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "dg537j4qxs4qoc"
+          },
           "editorType": "sql",
           "format": 1,
           "meta": {
             "builderOptions": {
-              "columns": [],
-              "database": "",
-              "limit": 1000,
-              "mode": "list",
-              "queryType": "table",
-              "table": ""
+              "columns": [], "database": "", "limit": 1000,
+              "mode": "list", "queryType": "table", "table": ""
             }
           },
           "pluginVersion": "4.23.5",
           "queryType": "table",
-          "rawSql": "SELECT countIf(severity = 'MEDIUM') AS value\r\nFROM telecom.fraud_alerts\r\nWHERE $__timeFilter(detected_at)",
+          "rawSql": "SELECT\n    severity,\n    uniqExact(alert_id) AS alerts\nFROM telecom.fraud_alerts\nWHERE $__timeFilter(detected_at)\nGROUP BY severity\nORDER BY alerts DESC",
           "refId": "A"
         }
       ],
-      "title": "Medium Alerts",
-      "type": "stat"
+      "title": "Severity Distribution",
+      "type": "piechart"
     },
+
     {
       "datasource": {
         "type": "grafana-clickhouse-datasource",
         "uid": "dg537j4qxs4qoc"
       },
+      "description": "Severity composition per fraud detection rule \u2014 see which rules produce the most critical alerts",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 18,
-        "y": 0
-      },
-      "id": 8,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "pluginVersion": "12.4.0",
-      "targets": [
-        {
-          "editorType": "sql",
-          "format": 1,
-          "meta": {
-            "builderOptions": {
-              "columns": [],
-              "database": "",
-              "limit": 1000,
-              "mode": "list",
-              "queryType": "table",
-              "table": ""
-            }
-          },
-          "pluginVersion": "4.23.5",
-          "queryType": "table",
-          "rawSql": "SELECT countIf(severity = 'HIGH') AS value\r\nFROM telecom.fraud_alerts\r\nWHERE $__timeFilter(detected_at)",
-          "refId": "A"
-        }
-      ],
-      "title": "High Alerts",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "grafana-clickhouse-datasource",
-        "uid": "dg537j4qxs4qoc"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
+          "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
             "axisColorMode": "text",
             "axisLabel": "",
             "axisPlacement": "auto",
-            "fillOpacity": 80,
+            "fillOpacity": 85,
             "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineWidth": 1,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineWidth": 0,
+            "scaleDistribution": { "type": "linear" },
+            "thresholdsStyle": { "mode": "off" }
           },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 3000
-              }
+            "steps": [{ "color": "green", "value": null }]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "CRITICAL" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FF4D4F", "mode": "fixed" } }
             ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "HIGH" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FF7A45", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "MEDIUM" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FFC53D", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 17 },
+      "id": 8,
+      "options": {
+        "barRadius": 0.05,
+        "barWidth": 0.7,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "orientation": "horizontal",
+        "showValue": "always",
+        "stacking": "normal",
+        "tooltip": { "hideZeros": true, "mode": "multi", "sort": "desc" },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
+      },
+      "pluginVersion": "12.4.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "dg537j4qxs4qoc"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "meta": {
+            "builderOptions": {
+              "columns": [], "database": "", "limit": 1000,
+              "mode": "list", "queryType": "table", "table": ""
+            }
+          },
+          "pluginVersion": "4.23.5",
+          "queryType": "table",
+          "rawSql": "SELECT\n    rule_name,\n    uniqExactIf(alert_id, severity = 'CRITICAL') AS \"CRITICAL\",\n    uniqExactIf(alert_id, severity = 'HIGH') AS \"HIGH\",\n    uniqExactIf(alert_id, severity = 'MEDIUM') AS \"MEDIUM\"\nFROM telecom.fraud_alerts\nWHERE $__timeFilter(detected_at)\nGROUP BY rule_name\nORDER BY uniqExact(alert_id) DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Rule \u00d7 Severity Breakdown",
+      "type": "barchart"
+    },
+
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "dg537j4qxs4qoc"
+      },
+      "description": "Geographic distribution of fraud alerts \u2014 warmer colors indicate higher alert volume",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "continuous-GrYlRd" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "fillOpacity": 90,
+            "gradientMode": "scheme",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineWidth": 0,
+            "scaleDistribution": { "type": "linear" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
           }
         },
         "overrides": []
       },
-      "gridPos": {
-        "h": 17,
-        "w": 11,
-        "x": 0,
-        "y": 6
-      },
-      "id": 3,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 17 },
+      "id": 9,
       "options": {
-        "barRadius": 0,
-        "barWidth": 0.97,
+        "barRadius": 0.05,
+        "barWidth": 0.65,
         "fullHighlight": false,
         "groupWidth": 0.7,
         "legend": {
@@ -395,279 +656,240 @@
         "orientation": "auto",
         "showValue": "always",
         "stacking": "none",
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
-        },
+        "tooltip": { "hideZeros": false, "mode": "single", "sort": "none" },
         "xTickLabelRotation": 0,
         "xTickLabelSpacing": 0
       },
       "pluginVersion": "12.4.0",
       "targets": [
         {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "dg537j4qxs4qoc"
+          },
           "editorType": "sql",
           "format": 1,
           "meta": {
             "builderOptions": {
-              "columns": [],
-              "database": "",
-              "limit": 1000,
-              "mode": "list",
-              "queryType": "table",
-              "table": ""
+              "columns": [], "database": "", "limit": 1000,
+              "mode": "list", "queryType": "table", "table": ""
             }
           },
           "pluginVersion": "4.23.5",
           "queryType": "table",
-          "rawSql": "SELECT\r\n    rule_name,\r\n    uniqExact(alert_id) AS total_alerts\r\nFROM telecom.fraud_alerts\r\nGROUP BY rule_name\r\nORDER BY total_alerts DESC",
+          "rawSql": "SELECT\n    country_code,\n    uniqExact(alert_id) AS alerts\nFROM telecom.fraud_alerts\nWHERE $__timeFilter(detected_at)\nGROUP BY country_code\nORDER BY alerts DESC",
           "refId": "A"
         }
       ],
-      "title": "Fraud Alerts by Rule",
+      "title": "Fraud Alerts by Country",
       "type": "barchart"
     },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+      "id": 102,
+      "panels": [],
+      "title": "Investigation",
+      "type": "row"
+    },
+
     {
       "datasource": {
         "type": "grafana-clickhouse-datasource",
         "uid": "dg537j4qxs4qoc"
       },
+      "description": "Latest critical and high severity alerts with evidence for investigation",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
+          "color": { "mode": "thresholds" },
           "custom": {
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
+            "align": "auto",
+            "cellOptions": { "type": "auto" },
+            "footer": {
+              "countRows": false,
+              "reducer": ["count"],
+              "show": true
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "text", "value": null }]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "severity" },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": { "mode": "basic", "type": "color-background" }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "CRITICAL": { "color": "dark-red", "index": 0 },
+                      "HIGH": { "color": "dark-orange", "index": 1 },
+                      "MEDIUM": { "color": "dark-yellow", "index": 2 }
+                    },
+                    "type": "value"
+                  }
+                ]
+              },
+              { "id": "custom.width", "value": 95 },
+              { "id": "custom.align", "value": "center" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "detected_at" },
+            "properties": [
+              { "id": "custom.width", "value": 175 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "country_code" },
+            "properties": [
+              { "id": "custom.width", "value": 55 },
+              { "id": "custom.align", "value": "center" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "customer_id" },
+            "properties": [
+              { "id": "custom.width", "value": 110 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "rule_name" },
+            "properties": [
+              { "id": "custom.width", "value": 165 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "alert_id" },
+            "properties": [
+              { "id": "custom.width", "value": 120 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 15, "x": 0, "y": 26 },
+      "id": 10,
+      "options": {
+        "cellHeight": "sm",
+        "enablePagination": true,
+        "showHeader": true,
+        "sortBy": [
+          { "desc": true, "displayName": "detected_at" }
+        ]
+      },
+      "pluginVersion": "12.4.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "dg537j4qxs4qoc"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "meta": {
+            "builderOptions": {
+              "columns": [], "database": "", "limit": 1000,
+              "mode": "list", "queryType": "table", "table": ""
             }
           },
-          "mappings": []
+          "pluginVersion": "4.23.5",
+          "queryType": "table",
+          "rawSql": "SELECT\n    detected_at,\n    alert_id,\n    severity,\n    rule_name,\n    customer_id,\n    country_code,\n    evidence\nFROM telecom.fraud_alerts\nWHERE severity IN ('CRITICAL', 'HIGH')\n  AND $__timeFilter(detected_at)\nORDER BY detected_at DESC\nLIMIT 50",
+          "refId": "A"
+        }
+      ],
+      "title": "Recent Critical & High Alerts",
+      "type": "table"
+    },
+
+    {
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "dg537j4qxs4qoc"
+      },
+      "description": "Top 10 customers ranked by total fraud alerts \u2014 candidates for account review",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "continuous-BlPu" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          }
         },
         "overrides": []
       },
-      "gridPos": {
-        "h": 17,
-        "w": 13,
-        "x": 11,
-        "y": 6
-      },
-      "id": 10,
+      "gridPos": { "h": 10, "w": 9, "x": 15, "y": 26 },
+      "id": 11,
       "options": {
-        "displayLabels": [
-          "name",
-          "percent"
-        ],
-        "legend": {
-          "displayMode": "list",
-          "placement": "right",
-          "showLegend": true
-        },
-        "pieType": "pie",
+        "displayMode": "lcd",
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
         "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
+          "calcs": ["lastNotNull"],
           "fields": "",
           "values": true
         },
-        "sort": "desc",
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
-        }
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
       },
       "pluginVersion": "12.4.0",
       "targets": [
         {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "dg537j4qxs4qoc"
+          },
           "editorType": "sql",
           "format": 1,
           "meta": {
             "builderOptions": {
-              "columns": [],
-              "database": "",
-              "limit": 1000,
-              "mode": "list",
-              "queryType": "table",
-              "table": ""
+              "columns": [], "database": "", "limit": 1000,
+              "mode": "list", "queryType": "table", "table": ""
             }
           },
           "pluginVersion": "4.23.5",
           "queryType": "table",
-          "rawSql": "SELECT\r\n    severity,\r\n    count() AS alerts\r\nFROM telecom.fraud_alerts\r\nWHERE $__timeFilter(detected_at)\r\nGROUP BY severity\r\nORDER BY alerts DESC",
+          "rawSql": "SELECT\n    customer_id,\n    uniqExact(alert_id) AS total_alerts\nFROM telecom.fraud_alerts\nWHERE $__timeFilter(detected_at)\nGROUP BY customer_id\nORDER BY total_alerts DESC\nLIMIT 10",
           "refId": "A"
         }
       ],
-      "title": "Fraud Alerts by Severity",
-      "type": "piechart"
+      "title": "Top Flagged Customers",
+      "type": "bargauge"
     },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "id": 103,
+      "panels": [],
+      "title": "Network Usage",
+      "type": "row"
+    },
+
     {
       "datasource": {
         "type": "grafana-clickhouse-datasource",
         "uid": "dg537j4qxs4qoc"
       },
+      "description": "Network data consumption over time by country \u2014 stacked area shows total volume and country contribution",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 2,
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 90000
-              }
-            ]
-          },
-          "unit": "decgbytes"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 23
-      },
-      "id": 14,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "pluginVersion": "12.4.0",
-      "targets": [
-        {
-          "editorType": "sql",
-          "format": 1,
-          "meta": {
-            "builderOptions": {
-              "columns": [],
-              "database": "",
-              "limit": 1000,
-              "mode": "list",
-              "queryType": "table",
-              "table": ""
-            }
-          },
-          "pluginVersion": "4.23.5",
-          "queryType": "table",
-          "rawSql": "SELECT\r\n    round(sum(total_megabytes) / 1024, 2) AS value\r\nFROM telecom.usage_aggregates\r\nWHERE $__timeFilter(window_start)",
-          "refId": "A"
-        }
-      ],
-      "title": "Total Data Consumption",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "grafana-clickhouse-datasource",
-        "uid": "dg537j4qxs4qoc"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          },
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 23
-      },
-      "id": 15,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "pluginVersion": "12.4.0",
-      "targets": [
-        {
-          "editorType": "sql",
-          "format": 1,
-          "meta": {
-            "builderOptions": {
-              "columns": [],
-              "database": "",
-              "limit": 1000,
-              "mode": "list",
-              "queryType": "table",
-              "table": ""
-            }
-          },
-          "pluginVersion": "4.23.5",
-          "queryType": "table",
-          "rawSql": "SELECT\r\n    sum(event_count) AS value\r\nFROM telecom.usage_aggregates\r\nWHERE $__timeFilter(window_start)",
-          "refId": "A"
-        }
-      ],
-      "title": "Underlying Usage Events",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "grafana-clickhouse-datasource",
-        "uid": "dg537j4qxs4qoc"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
+          "color": { "mode": "palette-classic" },
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
@@ -677,391 +899,156 @@
             "barAlignment": 0,
             "barWidthFactor": 0.6,
             "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
+            "fillOpacity": 30,
+            "gradientMode": "opacity",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
             "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
             "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
             "showValues": false,
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "normal" },
+            "thresholdsStyle": { "mode": "off" }
           },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
+            "steps": [{ "color": "green", "value": null }]
           },
           "unit": "decgbytes"
         },
         "overrides": []
       },
-      "gridPos": {
-        "h": 15,
-        "w": 13,
-        "x": 0,
-        "y": 31
-      },
-      "id": 6,
+      "gridPos": { "h": 10, "w": 15, "x": 0, "y": 37 },
+      "id": 12,
       "options": {
         "legend": {
-          "calcs": [],
-          "displayMode": "list",
+          "calcs": ["sum", "mean"],
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
-        }
+        "tooltip": { "hideZeros": false, "mode": "multi", "sort": "desc" }
       },
       "pluginVersion": "12.4.0",
       "targets": [
         {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "dg537j4qxs4qoc"
+          },
           "editorType": "sql",
           "format": 0,
           "meta": {
             "builderOptions": {
-              "columns": [],
-              "database": "",
-              "limit": 1000,
-              "mode": "list",
-              "queryType": "table",
-              "table": ""
+              "columns": [], "database": "", "limit": 1000,
+              "mode": "list", "queryType": "table", "table": ""
             }
           },
           "pluginVersion": "4.23.5",
           "queryType": "timeseries",
-          "rawSql": "SELECT\r\n    toStartOfInterval(window_start, INTERVAL 5 MINUTE) AS time,\r\n    country_code,\r\n    sum(total_megabytes) / 1024 AS total_gb\r\nFROM telecom.usage_aggregates\r\nWHERE $__timeFilter(window_start)\r\nGROUP BY time, country_code\r\nORDER BY time",
+          "rawSql": "SELECT\n    toStartOfInterval(window_start, INTERVAL 5 MINUTE) AS time,\n    country_code,\n    round(sum(total_megabytes) / 1024, 2) AS total_gb\nFROM telecom.usage_aggregates\nWHERE $__timeFilter(window_start)\nGROUP BY time, country_code\nORDER BY time",
           "refId": "A"
         }
       ],
-      "title": "Telecom Usage Over Time",
+      "title": "Data Usage Over Time",
       "type": "timeseries"
     },
+
     {
       "datasource": {
         "type": "grafana-clickhouse-datasource",
         "uid": "dg537j4qxs4qoc"
       },
+      "description": "Total data consumption ranked by country",
       "fieldConfig": {
         "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "footer": {
-              "reducers": []
-            },
-            "inspect": false
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 25
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 14,
-        "w": 11,
-        "x": 13,
-        "y": 31
-      },
-      "id": 4,
-      "options": {
-        "cellHeight": "sm",
-        "enablePagination": false,
-        "showHeader": true,
-        "sortBy": [
-          {
-            "desc": true,
-            "displayName": "total_alerts"
-          }
-        ]
-      },
-      "pluginVersion": "12.4.0",
-      "targets": [
-        {
-          "editorType": "sql",
-          "format": 1,
-          "meta": {
-            "builderOptions": {
-              "columns": [],
-              "database": "",
-              "limit": 1000,
-              "mode": "list",
-              "queryType": "table",
-              "table": ""
-            }
-          },
-          "pluginVersion": "4.23.5",
-          "queryType": "table",
-          "rawSql": "SELECT\r\n    customer_id,\r\n    count() AS total_alerts,\r\n    countIf(severity = 'CRITICAL') AS critical_alerts,\r\n    countIf(severity = 'HIGH') AS high_alerts\r\nFROM telecom.fraud_alerts\r\nWHERE $__timeFilter(detected_at)\r\nGROUP BY customer_id\r\nORDER BY total_alerts DESC\r\nLIMIT 10",
-          "refId": "A"
-        }
-      ],
-      "title": "Top 10 Affected Customers",
-      "type": "table"
-    },
-    {
-      "datasource": {
-        "type": "grafana-clickhouse-datasource",
-        "uid": "dg537j4qxs4qoc"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
+          "color": { "mode": "continuous-purples" },
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
             "axisColorMode": "text",
             "axisLabel": "",
             "axisPlacement": "auto",
-            "fillOpacity": 80,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineWidth": 1,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
+            "fillOpacity": 90,
+            "gradientMode": "scheme",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineWidth": 0,
+            "scaleDistribution": { "type": "linear" },
+            "thresholdsStyle": { "mode": "off" }
           },
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 20400
-              }
-            ]
+            "steps": [{ "color": "purple", "value": null }]
           },
           "unit": "decgbytes"
         },
         "overrides": []
       },
-      "gridPos": {
-        "h": 13,
-        "w": 24,
-        "x": 0,
-        "y": 46
-      },
-      "id": 5,
+      "gridPos": { "h": 10, "w": 9, "x": 15, "y": 37 },
+      "id": 13,
       "options": {
-        "barRadius": 0,
-        "barWidth": 0.97,
+        "barRadius": 0.05,
+        "barWidth": 0.65,
         "fullHighlight": false,
         "groupWidth": 0.7,
         "legend": {
           "calcs": [],
           "displayMode": "list",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "orientation": "horizontal",
         "showValue": "always",
         "stacking": "none",
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
-        },
+        "tooltip": { "hideZeros": false, "mode": "single", "sort": "none" },
         "xTickLabelRotation": 0,
         "xTickLabelSpacing": 0
       },
       "pluginVersion": "12.4.0",
       "targets": [
         {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "dg537j4qxs4qoc"
+          },
           "editorType": "sql",
           "format": 1,
           "meta": {
             "builderOptions": {
-              "columns": [],
-              "database": "",
-              "limit": 1000,
-              "mode": "list",
-              "queryType": "table",
-              "table": ""
+              "columns": [], "database": "", "limit": 1000,
+              "mode": "list", "queryType": "table", "table": ""
             }
           },
           "pluginVersion": "4.23.5",
           "queryType": "table",
-          "rawSql": "SELECT\r\n    country_code,\r\n    round(sum(total_megabytes) / 1024, 2) AS total_gb\r\nFROM telecom.usage_aggregates\r\nWHERE $__timeFilter(window_start)\r\nGROUP BY country_code\r\nORDER BY total_gb DESC",
+          "rawSql": "SELECT\n    country_code,\n    round(sum(total_megabytes) / 1024, 2) AS total_gb\nFROM telecom.usage_aggregates\nWHERE $__timeFilter(window_start)\nGROUP BY country_code\nORDER BY total_gb DESC",
           "refId": "A"
         }
       ],
-      "title": "Data Consumption by Country",
-      "type": "barchart"
-    },
-    {
-      "datasource": {
-        "type": "grafana-clickhouse-datasource",
-        "uid": "dg537j4qxs4qoc"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "fillOpacity": 80,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineWidth": 1,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 5000
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 24,
-        "x": 0,
-        "y": 59
-      },
-      "id": 12,
-      "options": {
-        "barRadius": 0,
-        "barWidth": 0.97,
-        "fullHighlight": false,
-        "groupWidth": 0.7,
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "orientation": "auto",
-        "showValue": "always",
-        "stacking": "none",
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
-        },
-        "xTickLabelRotation": 0,
-        "xTickLabelSpacing": 0
-      },
-      "pluginVersion": "12.4.0",
-      "targets": [
-        {
-          "editorType": "sql",
-          "format": 1,
-          "meta": {
-            "builderOptions": {
-              "columns": [],
-              "database": "",
-              "limit": 1000,
-              "mode": "list",
-              "queryType": "table",
-              "table": ""
-            }
-          },
-          "pluginVersion": "4.23.5",
-          "queryType": "table",
-          "rawSql": "SELECT\r\n    country_code,\r\n    count() AS alerts\r\nFROM telecom.fraud_alerts\r\nWHERE $__timeFilter(detected_at)\r\nGROUP BY country_code\r\nORDER BY alerts DESC",
-          "refId": "A"
-        }
-      ],
-      "title": "Fraud Alerts by Country",
+      "title": "Data Volume by Country",
       "type": "barchart"
     }
   ],
   "preload": false,
-  "refresh": "5m",
+  "refresh": "30s",
   "schemaVersion": 42,
-  "tags": [],
+  "tags": ["telecom", "fraud-detection", "real-time", "clickhouse"],
   "templating": {
     "list": []
   },
   "time": {
-    "from": "now-12h",
+    "from": "now-6h",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "browser",
   "title": "Telecom Fraud & Usage Intelligence",
   "uid": "adc6fbh",
-  "version": 40,
+  "version": 42,
   "weekStart": ""
 }

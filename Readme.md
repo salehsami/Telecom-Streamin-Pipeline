@@ -45,7 +45,9 @@ The figures come from different components and measurements. They should not be 
 
 The Grafana dashboard brings the processed data into a visual interface, making fraud alerts and telecom usage patterns easier to inspect.
 
-![Telecom fraud and usage dashboard](docs/v1/1.1.%20Screenshot%202026-11-24%20021205.png)
+
+![Telecom fraud and usage dashboard](https://snapshots.raintank.io/dashboard/snapshot/AwH7ORKpNKEodzzLtHByVexUksnSaNxR)
+
 
 ### Additional dashboard views
 
